@@ -1,0 +1,27 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Project specific
+**.DS_Store
+.floyd*
+
+# Exclude data
+/data/
