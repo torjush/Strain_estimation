@@ -23,5 +23,6 @@ ipython_config.py
 **.DS_Store
 .floyd*
 
-# Exclude data
+# Exclude data and output
 /data/
+/output/
