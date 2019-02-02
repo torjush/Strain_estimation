@@ -3,6 +3,13 @@ dependencies:
   - numpy
   - tensorflow=1.10.0
   - h5py
+  - tqdm
   - jupyter
   - matplotlib
   - seaborn
+  - opencv
+  - scipy
+  - scikit-image
+  - pyqt
+  - pip:
+    - pytest
