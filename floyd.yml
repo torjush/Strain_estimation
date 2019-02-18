@@ -1,0 +1,6 @@
+env: tensorflow-1.10
+
+input:
+    - source: torjuh/datasets/affine_test/1
+      destination: data
+machine: gpu
