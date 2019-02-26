@@ -5,6 +5,7 @@ matplotlib.use('agg')
 import matplotlib.pyplot as plt
 
 from affineNet import AffineNet
+from losses import nncc2d
 import argparse
 import os
 
@@ -32,7 +33,7 @@ optimizer = tf.train.AdamOptimizer(learning_rate=0.0001)
 for i in range(5000):
     with tf.GradientTape() as tape:
         warped = affnet(tf.constant(original), tf.constant(moving))
-        loss = affnet.computeLoss(tf.constant(moving), warped)
+        loss = nncc2d(tf.constant(moving), warped)
     print('{{"metric": "Loss", "value": {}, "step": {}}}'.format(loss, i + 1))
     grads = tape.gradient(loss, tf.trainable_variables())
     optimizer.apply_gradients(zip(grads, tf.trainable_variables()),

@@ -3,18 +3,17 @@ import tensorflow as tf
 
 class DeformableNet():
     # TODO: subclass tf.keras.Model
-    # TODO: Implement bending penalty
-    def __init__(self, num_conv_layers):
+    def __init__(self, num_conv_layers, leakage=0.2):
         self.cnn = tf.make_template('convnet',
                                     self.__buildCNN,
-                                    num_stages=num_conv_layers)
+                                    num_stages=num_conv_layers,
+                                    alpha=leakage)
 
     def __call__(self, fixed, moving):
         height = moving.shape[1]
         width = moving.shape[2]
         batch_size = moving.shape[0]
 
-        # TODO: sjekk at disse ikke bare er null
         points = self.cnn(fixed, moving)
         interpolated_points = self.bSplineInterpolation(points, height, width)
 
@@ -87,8 +86,10 @@ class DeformableNet():
         Q4 = tf.reshape(Q4, [batch_size, height * width])
 
         # Do the actual interpolation
-        R1 = ((x1 - x_t) / (x1 - x0 + epsilon)) * Q1 + ((x_t - x0) / (x1 - x0 + epsilon)) * Q3
-        R2 = ((x1 - x_t) / (x1 - x0 + epsilon)) * Q2 + ((x_t - x0) / (x1 - x0 + epsilon)) * Q4
+        R1 = ((x1 - x_t) / (x1 - x0 + epsilon)) * Q1 + \
+            ((x_t - x0) / (x1 - x0 + epsilon)) * Q3
+        R2 = ((x1 - x_t) / (x1 - x0 + epsilon)) * Q2 + \
+            ((x_t - x0) / (x1 - x0 + epsilon)) * Q4
 
         warped_pixels = ((y1 - y_t) / (y1 - y0 + epsilon)) * R1 + \
             ((y_t - y0) / (y1 - y0 + epsilon)) * R2
@@ -114,6 +115,27 @@ class DeformableNet():
 
         padded_points = tf.pad(points, [[0, 0], [1, 3], [1, 3], [0, 0]],
                                'SYMMETRIC')
+
+        def __makeGatherIndices(i, j):
+            flat_i = tf.reshape(i, [-1])
+            flat_j = tf.reshape(j, [-1])
+
+            index_stack = []
+            # TODO: Fiks denne med tf.range i stedet for loops
+            for batch in range(batch_size):
+                for channel in range(num_channels):
+                    stacked = tf.stack([batch * tf.ones_like(flat_i),
+                                        flat_j,
+                                        flat_i,
+                                        channel * tf.ones_like(flat_i)])
+                    index_stack.append(stacked)
+
+            index_stack = tf.concat(index_stack, axis=1)
+            index_stack = tf.transpose(index_stack)
+            index_stack = tf.cast(index_stack, 'int32')
+
+            return index_stack
+
         points_matrix = []
         for add_j in range(4):
             points_row = []
@@ -166,28 +188,7 @@ class DeformableNet():
 
         return B_u
 
-    def __getGatherIndices(self, i, j, batch_size, num_channels):
-        flat_i = tf.reshape(i, [-1])
-        flat_j = tf.reshape(j, [-1])
-
-        index_stack = []
-        # TODO: Fiks denne med tf.range i stedet for loops
-        for batch in range(batch_size):
-            for channel in range(num_channels):
-                stacked = tf.stack([batch * tf.ones_like(flat_i),
-                                    flat_j,
-                                    flat_i,
-                                    channel * tf.ones_like(flat_i)])
-                index_stack.append(stacked)
-
-        index_stack = tf.concat(index_stack, axis=1)
-        index_stack = tf.transpose(index_stack)
-        index_stack = tf.cast(index_stack, 'int32')
-
-        return index_stack
-
-    def __buildCNN(self, fixed, moving, num_stages):
-        # TODO: Leaky relu
+    def __buildCNN(self, fixed, moving, num_stages, alpha):
         concatenated = tf.concat([fixed, moving], axis=-1)
 
         # Convolutions + downsampling
@@ -196,8 +197,9 @@ class DeformableNet():
             prev = tf.layers.Conv2D(
                 filters=32, kernel_size=[3, 3],
                 padding='same',
-                activation=None,  # 'relu',
+                activation=None,
                 kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
+            prev = tf.nn.leaky_relu(prev, alpha=alpha)
             prev = tf.layers.AveragePooling2D(pool_size=[2, 2],
                                               strides=2)(prev)
             prev = tf.layers.BatchNormalization()(prev)
@@ -206,28 +208,32 @@ class DeformableNet():
         prev = tf.layers.Conv2D(
             filters=32, kernel_size=[3, 3],
             padding='same',
-            activation='relu',
+            activation=None,
             kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
+        prev = tf.nn.leaky_relu(prev, alpha=alpha)
         prev = tf.layers.BatchNormalization()(prev)
         prev = tf.layers.Conv2D(
             filters=32, kernel_size=[3, 3],
             padding='same',
-            activation='relu',
+            activation=None,
             kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
+        prev = tf.nn.leaky_relu(prev, alpha=alpha)
         prev = tf.layers.BatchNormalization()(prev)
 
         # 1x1 convolutions
         prev = tf.layers.Conv2D(
             filters=32, kernel_size=[1, 1],
             padding='same',
-            activation='relu',
+            activation=None,
             kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
+        prev = tf.nn.leaky_relu(prev, alpha=alpha)
         prev = tf.layers.BatchNormalization()(prev)
         prev = tf.layers.Conv2D(
             filters=32, kernel_size=[1, 1],
             padding='same',
-            activation='relu',
+            activation=None,
             kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
+        prev = tf.nn.leaky_relu(prev, alpha=alpha)
         prev = tf.layers.BatchNormalization()(prev)
 
         out = tf.layers.Conv2D(
@@ -235,54 +241,5 @@ class DeformableNet():
             padding='same',
             activation=None,
             kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
-
-        return out
-
-    def computeLoss(self, moving, warped):
-        # TODO: Move to separate file
-        batch_num = moving.shape[0]
-        separate_moving = tf.split(value=moving,
-                                   num_or_size_splits=batch_num,
-                                   axis=0)
-        separate_warped = tf.split(value=warped,
-                                   num_or_size_splits=batch_num,
-                                   axis=0)
-
-        separate_ncc = [self.ncc2d(x, y)
-                        for x, y in zip(separate_moving, separate_warped)]
-        separate_ncc = tf.concat(values=separate_ncc, axis=3)
-        ncc_loss = -tf.reduce_mean(separate_ncc)
-
-        return ncc_loss
-
-    def ncc2d(self, moving_img, warped_img):
-        # TODO: Move to separate file
-        # TODO: Make this take a whole batch
-        warped_img = tf.squeeze(warped_img)
-        warped_img = tf.expand_dims(warped_img, -1)
-        warped_img = tf.expand_dims(warped_img, -1)
-
-        moving_img = moving_img - tf.reduce_mean(moving_img,
-                                                 axis=[1, 2],
-                                                 keep_dims=True)
-        warped_img = warped_img - tf.reduce_mean(warped_img,
-                                                 axis=[1, 2],
-                                                 keep_dims=True)
-
-        def conv(x, y):
-            return tf.nn.conv2d(x, y, padding='VALID', strides=[1, 1, 1, 1])
-
-        epsilon = 1e-8
-        warped_variance = tf.reduce_sum(tf.square(warped_img),
-                                        axis=[0, 1],
-                                        keep_dims=True) + epsilon
-        moving_variance = tf.reduce_sum(tf.square(moving_img),
-                                        axis=[1, 2],
-                                        keep_dims=True) + epsilon
-
-        denominator = tf.sqrt(moving_variance * warped_variance)
-        numerator = conv(moving_img, warped_img)
-
-        out = tf.div(numerator, denominator)
 
         return out
