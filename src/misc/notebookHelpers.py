@@ -14,7 +14,7 @@ def ultraSoundAnimation(video, points=None, fps=24, with_colorbar=False):
       video(numpy array): Ultrasound recording as 3d array
                           (frame, height, width)
       points(numpy array): 3D array containing mitral annulus points
-                           (frame, xcoordinate, ycoordinate)
+                           (frame, [left right], [x y])
       fps(int): Frame rate of ultrasound recording
       with_colorbar(bool): Wether or not to show a colorbar
                            beside the animation
@@ -27,16 +27,16 @@ def ultraSoundAnimation(video, points=None, fps=24, with_colorbar=False):
     fig, ax = plt.subplots()
     line = ax.imshow(video[0, :, :], cmap='Greys_r')
     if points is not None:
-        line2 = ax.scatter(points[0, 0, 1], points[0, 0, 0], color='red')
-        line3 = ax.scatter(points[0, 1, 1], points[0, 1, 0], color='red')
+        line2 = ax.scatter(points[0, 0, 0], points[0, 0, 0], color='red')
+        line3 = ax.scatter(points[0, 1, 0], points[0, 1, 1], color='red')
     if with_colorbar:
         ax.figure.colorbar(line, ax=ax)
 
     def init():
         line.set_data(video[0, :, :])
         if points is not None:
-            line2.set_offsets([points[0, 0, 1], points[0, 0, 0]])
-            line3.set_offsets([points[0, 1, 1], points[0, 1, 0]])
+            line2.set_offsets([points[0, 0, 0], points[0, 0, 1]])
+            line3.set_offsets([points[0, 1, 0], points[0, 1, 1]])
             return (line, line2, line3)
         else:
             return (line, )
@@ -44,8 +44,8 @@ def ultraSoundAnimation(video, points=None, fps=24, with_colorbar=False):
     def animate(i):
         line.set_data(video[i, :, :])
         if points is not None:
-            line2.set_offsets([points[i, 0, 1], points[i, 0, 0]])
-            line3.set_offsets([points[i, 1, 1], points[i, 1, 0]])
+            line2.set_offsets([points[i, 0, 0], points[i, 0, 1]])
+            line3.set_offsets([points[i, 1, 0], points[i, 1, 1]])
             return (line, line2, line3)
         else:
             return (line, )
