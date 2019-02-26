@@ -1,56 +1,61 @@
-import numpy as np
-import matplotlib.pyplot as plt
 import h5py
-import glob
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import argparse
 
+plt.ion()
+parser = argparse.ArgumentParser()
+parser.add_argument('-d', '--data-path')
+args = parser.parse_args()
+root_dir = "../../data/processed/ma_labeled"
+# fname_read = os.path.join(root_dir, "RawData/DL2019/_D113031/J24BF7O8.h5")
 
-class MouseCross():
-    def __init__(self, ax, **kwargs):
-        self.ax = ax
-        self.line, = self.ax.plot([0], [0], visible=False, **kwargs)
+f_read = h5py.File(args.data_path, 'r')
 
-    def show_cross(self, event):
-        if event.inaxes == self.ax:
-            self.line.set_data([event.xdata], [event.ydata])
-            self.line.set_visible(True)
-        else:
-            self.line.set_visible(False)
-        plt.draw()
+tissue = np.array(f_read['tissue']['data'])
 
-    def place_cross(self, event):
-        self.ax.scatter(event.xdata, event.ydata, marker='x', color='red')
+ref_coord = np.empty(shape=(0,4))
+imgs = np.empty(shape=(0,tissue.shape[1],tissue.shape[0]))
+print(imgs.shape)
 
+coordinates = [(0,0),(0,0),(0,0)]
 
-class Backend():
-    def __init__(self, path_to_h5s):
-        self.file_paths = glob.glob(path_to_h5s + '*/*.h5')
-        self.file_index = 0
+for i in range(tissue.shape[2]):
+    plt.imshow(np.transpose(tissue[:,:,i]), cmap='gray')
+    plt.pause(0.01)
+    plt.clf()
+    print(i)
 
-    def get_current_sample(self):
-        h5file = h5py.File(self.file_paths[self.file_index], 'r')
-        video = np.transpose(h5file['tissue/data'], [2, 1, 0])
-        h5file.close()
-        return video[0, :, :]
+for i in range(tissue.shape[2]):
+    plt.imshow(np.transpose(tissue[:,:,i]), cmap='gray')
+    imgs = np.append(imgs, [np.transpose(tissue[:,:,i])], axis=0)
 
-    def get_next_sample(self):
-        if self.file_index < len(self.file_paths):
-            self.file_index += 1
-            return self.get_current_sample()
-        else:
-            return None
+    fig = plt.gcf()
+    fig.set_size_inches(10,10)
 
-    def get_previous_sample(self):
-        if self.file_index > 0:
-            self.file_index -= 1
-        return self.get_current_sample()
+    coordinates = plt.ginput(n=3, timeout=0, show_clicks=True)
+    plt.clf()
+    plt.scatter(coordinates[0][0], coordinates[0][1], color='b', marker='*', alpha=0.2)
+    plt.scatter(coordinates[1][0], coordinates[1][1], color='b', marker='*', alpha=0.2)
 
+    ref_coord = np.append(ref_coord, np.array([[coordinates[0][0],
+                                                coordinates[0][1],
+                                                coordinates[1][0],
+                                                coordinates[1][1]]]), axis=0)
+    print(ref_coord)
+patient_num = int(args.data_path.split('/')[-2][-1])
+fname_write = os.path.join(root_dir, f"p{patient_num}_4c4.h5")
+f_write = h5py.File(fname_write, 'w')
 
-backend = Backend('../../data/interim/')
-fig, ax = plt.subplots()
-ax.imshow(backend.get_current_sample())
-cross = MouseCross(ax, marker='x', markersize=10,
-                   color='red',)
-fig.canvas.mpl_connect('motion_notify_event', cross.show_cross)
-fig.canvas.mpl_connect('button_release_event', cross.place_cross)
-plt.tight_layout()
-plt.show()
+imgs = f_write.create_dataset("images", data=imgs)
+ref_coord = f_write.create_dataset("reference", data=ref_coord)
+
+fpath_write = os.path.join(root_dir, args.data_path.split('/')[-2:][0])
+if not os.path.exists(fpath_write):
+    os.mkdir(fpath_write)
+fname_write = os.path.join(fpath_write, args.data_path.split('/')[-2:][1])
+f_write = h5py.File(fname_write, 'w')
+
+imgs = f_write.create_dataset("images", data=imgs)
+ref_coord = f_write.create_dataset("reference", data=ref_coord)
