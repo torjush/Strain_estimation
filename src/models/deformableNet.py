@@ -1,20 +1,19 @@
 import tensorflow as tf
 
 
-class DeformableNet():
-    # TODO: subclass tf.keras.Model
+class DeformableNet(tf.keras.Model):
     def __init__(self, num_conv_layers, leakage=0.2):
-        self.cnn = tf.make_template('convnet',
-                                    self.__buildCNN,
-                                    num_stages=num_conv_layers,
-                                    alpha=leakage)
+        super(DeformableNet, self).__init__(name='deformable_net')
+        self.num_stages = num_conv_layers
+        self.alpha = leakage
+        self.__buildCNN()
 
-    def __call__(self, fixed, moving):
+    def call(self, fixed, moving):
         height = moving.shape[1]
         width = moving.shape[2]
         batch_size = moving.shape[0]
 
-        points = self.cnn(fixed, moving)
+        points = self.__runCNN(fixed, moving)
         interpolated_points = self.bSplineInterpolation(points, height, width)
 
         # make a grid of original points
@@ -140,8 +139,7 @@ class DeformableNet():
         for add_j in range(4):
             points_row = []
             for add_i in range(4):
-                gather_idc = self.__getGatherIndices(i + add_i, j + add_j,
-                                                     batch_size, num_channels)
+                gather_idc = __makeGatherIndices(i + add_i, j + add_j)
                 points_entry = tf.gather_nd(padded_points, gather_idc)
                 points_entry = tf.reshape(points_entry,
                                           [batch_size, new_height,
@@ -188,58 +186,80 @@ class DeformableNet():
 
         return B_u
 
-    def __buildCNN(self, fixed, moving, num_stages, alpha):
-        concatenated = tf.concat([fixed, moving], axis=-1)
-
+    def __buildCNN(self):
         # Convolutions + downsampling
-        prev = concatenated
-        for i in range(num_stages):
-            prev = tf.layers.Conv2D(
-                filters=32, kernel_size=[3, 3],
-                padding='same',
-                activation=None,
-                kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
-            prev = tf.nn.leaky_relu(prev, alpha=alpha)
-            prev = tf.layers.AveragePooling2D(pool_size=[2, 2],
-                                              strides=2)(prev)
-            prev = tf.layers.BatchNormalization()(prev)
+        for i in range(self.num_stages):
+            setattr(self, f'conv_{i}',
+                    tf.keras.layers.Conv2D(
+                        filters=32, kernel_size=[3, 3],
+                        padding='same',
+                        activation=None))
+            setattr(self, f'avgpool_{i}',
+                    tf.keras.layers.AveragePooling2D(pool_size=[2, 2]))
+            setattr(self, f'batchnorm_{i}',
+                    tf.keras.layers.BatchNormalization())
 
         # Final convolutions
-        prev = tf.layers.Conv2D(
+        self.finalconv_0 = tf.keras.layers.Conv2D(
             filters=32, kernel_size=[3, 3],
             padding='same',
-            activation=None,
-            kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
-        prev = tf.nn.leaky_relu(prev, alpha=alpha)
-        prev = tf.layers.BatchNormalization()(prev)
-        prev = tf.layers.Conv2D(
+            activation=None)
+
+        self.finalbatchnorm_0 = tf.keras.layers.BatchNormalization()
+
+        self.finalconv_1 = tf.keras.layers.Conv2D(
             filters=32, kernel_size=[3, 3],
             padding='same',
-            activation=None,
-            kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
-        prev = tf.nn.leaky_relu(prev, alpha=alpha)
-        prev = tf.layers.BatchNormalization()(prev)
+            activation=None)
+
+        self.finalbatchnorm_1 = tf.keras.layers.BatchNormalization()
 
         # 1x1 convolutions
-        prev = tf.layers.Conv2D(
+        self.conv1x1_0 = tf.keras.layers.Conv2D(
             filters=32, kernel_size=[1, 1],
             padding='same',
-            activation=None,
-            kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
-        prev = tf.nn.leaky_relu(prev, alpha=alpha)
-        prev = tf.layers.BatchNormalization()(prev)
-        prev = tf.layers.Conv2D(
-            filters=32, kernel_size=[1, 1],
-            padding='same',
-            activation=None,
-            kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
-        prev = tf.nn.leaky_relu(prev, alpha=alpha)
-        prev = tf.layers.BatchNormalization()(prev)
+            activation=None)
 
-        out = tf.layers.Conv2D(
+        self.batchnorm1x1_0 = tf.keras.layers.BatchNormalization()
+
+        self.conv1x1_1 = tf.keras.layers.Conv2D(
+            filters=32, kernel_size=[1, 1],
+            padding='same',
+            activation=None)
+
+        self.batchnorm1x1_1 = tf.keras.layers.BatchNormalization()
+
+        self.cnn_out = tf.keras.layers.Conv2D(
             filters=2, kernel_size=[1, 1],
             padding='same',
-            activation=None,
-            kernel_initializer=tf.contrib.layers.xavier_initializer())(prev)
+            activation=None)
+
+    def __runCNN(self, fixed, moving):
+        concatenated = tf.concat([fixed, moving], axis=-1)
+
+        prev = concatenated
+        for i in range(self.num_stages):
+            prev = getattr(self, f'conv_{i}')(prev)
+            prev = tf.nn.leaky_relu(prev, self.alpha)
+            prev = getattr(self, f'avgpool_{i}')(prev)
+            prev = getattr(self, f'batchnorm_{i}')(prev)
+
+        prev = self.finalconv_0(prev)
+        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.finalbatchnorm_0(prev)
+
+        prev = self.finalconv_1(prev)
+        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.finalbatchnorm_1(prev)
+
+        prev = self.conv1x1_0(prev)
+        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.batchnorm1x1_0(prev)
+
+        prev = self.conv1x1_1(prev)
+        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.batchnorm1x1_1(prev)
+
+        out = self.cnn_out(prev)
 
         return out

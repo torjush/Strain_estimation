@@ -35,18 +35,17 @@ for i in tqdm.tqdm(range(5000)):
     with tf.GradientTape() as tape:
         warped = defNet(fixed_batch, moving_batch)
         loss = nncc2d(tf.constant(moving_batch), warped)
-    grads = tape.gradient(loss, tf.trainable_variables())
+    grads = tape.gradient(loss, defNet.trainable_variables)
     with tf.contrib.summary.record_summaries_every_n_global_steps(1):
         tf.contrib.summary.scalar('loss', loss)
-        for var in tf.trainable_variables():
+        for var in defNet.trainable_variables:
             tf.contrib.summary.histogram(var.name, var)
-        for grad, var in zip(grads, tf.trainable_variables()):
+        for grad, var in zip(grads, defNet.trainable_variables):
             tf.contrib.summary.histogram(var.name + '/gradient', grad)
     with tf.contrib.summary.record_summaries_every_n_global_steps(50):
         tf.contrib.summary.image('Fixed', fixed_batch, max_images=1)
         tf.contrib.summary.image('Moving', moving_batch, max_images=1)
         tf.contrib.summary.image('Warped', warped, max_images=1)
 
-    optimizer.apply_gradients(zip(grads, tf.trainable_variables()),
+    optimizer.apply_gradients(zip(grads, defNet.trainable_variables),
                               global_step=global_step)
-    global_step.assign_add(1)
