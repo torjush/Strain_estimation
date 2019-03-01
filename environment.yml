@@ -9,7 +9,7 @@ dependencies:
   - seaborn
   - opencv
   - scipy
-  - scikit-image
   - pyqt
   - pip:
     - pytest
+    - scikit-image
