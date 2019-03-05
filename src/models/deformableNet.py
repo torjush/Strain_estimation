@@ -8,32 +8,36 @@ class DeformableNet(tf.keras.Model):
         self.alpha = leakage
         self.__buildCNN()
 
-    def call(self, fixed, moving):
-        height = moving.shape[1]
-        width = moving.shape[2]
-        batch_size = moving.shape[0]
+    def call(self, fixed, moving, train=True):
+        height = int(moving.shape[1])
+        width = int(moving.shape[2])
+        batch_size = int(moving.shape[0])
 
-        points = self.__runCNN(fixed, moving)
-        interpolated_points = self.bSplineInterpolation(points, height, width)
+        displacements = self.__runCNN(fixed, moving)
+        interpolated_displacements = self.bSplineInterpolation(
+            displacements, height, width)
 
-        # make a grid of original points
-        xx, yy = self.__makeMeshgrids(width, height, width, height)
-        grid = tf.concat([tf.reshape(xx, [1, -1]),
-                          tf.reshape(yy, [1, -1])], axis=0)
-        grid = tf.stack([grid] * batch_size)
+        if train:
+            # make a grid of original points
+            xx, yy = self.__makeMeshgrids(width, height, width, height)
+            grid = tf.concat([tf.reshape(xx, [1, -1]),
+                              tf.reshape(yy, [1, -1])], axis=0)
+            grid = tf.stack([grid] * batch_size)
 
-        # Add x and y components of the interpolated points to the grid
-        flat_grid = tf.reshape(grid, [batch_size, 2, -1])
-        flat_points = tf.reshape(
-            tf.transpose(interpolated_points, [0, 3, 1, 2]),
-            [batch_size, 2, -1])
+            # Add the interpolated displacements to the grid
+            flat_grid = tf.reshape(grid, [batch_size, 2, -1])
+            flat_displacements = tf.reshape(
+                tf.transpose(interpolated_displacements, [0, 3, 1, 2]),
+                [batch_size, 2, -1])
 
-        transformation_grid = tf.add(flat_points, flat_grid)
+            warped_grid = tf.add(flat_displacements, flat_grid)
 
-        warped = self.sampleBilinear(fixed, transformation_grid,
-                                     height, width, batch_size)
+            warped = self.sampleBilinear(fixed, warped_grid,
+                                         height, width, batch_size)
 
-        return warped
+            return warped
+        else:
+            return interpolated_displacements
 
     def __makeMeshgrids(self, nx, ny, width, height):
         x_range = tf.linspace(0., nx - 1, width)
@@ -43,11 +47,11 @@ class DeformableNet(tf.keras.Model):
 
         return xx, yy
 
-    def sampleBilinear(self, img, trans_grid, height, width,
+    def sampleBilinear(self, img, warped_grid, height, width,
                        batch_size, epsilon=1e-5):
-        x_t = tf.reshape(tf.slice(trans_grid, [0, 0, 0], [-1, 1, -1]),
+        x_t = tf.reshape(tf.slice(warped_grid, [0, 0, 0], [-1, 1, -1]),
                          [batch_size, height * width])
-        y_t = tf.reshape(tf.slice(trans_grid, [0, 1, 0], [-1, 1, -1]),
+        y_t = tf.reshape(tf.slice(warped_grid, [0, 1, 0], [-1, 1, -1]),
                          [batch_size, height * width])
 
         # Find corners around each sampling point
@@ -97,14 +101,14 @@ class DeformableNet(tf.keras.Model):
 
         return warped
 
-    def bSplineInterpolation(self, points, new_height, new_width):
+    def bSplineInterpolation(self, displacements, new_height, new_width):
         # TODO: Implement using transposed convolutions and fixed kernels
-        nx = tf.cast(points.shape[2], 'float32')
-        ny = tf.cast(points.shape[1], 'float32')
-        num_channels = points.shape[3]
-        batch_size = points.shape[0]
+        nx = tf.cast(displacements.shape[2], 'float32')
+        ny = tf.cast(displacements.shape[1], 'float32')
+        num_channels = displacements.shape[3]
+        batch_size = displacements.shape[0]
 
-        xx, yy = self.__makeMeshgrids(nx, ny, new_height, new_width)
+        xx, yy = self.__makeMeshgrids(nx, ny, new_width, new_height)
 
         u = tf.div(xx, nx) - tf.floor_div(xx, nx)
         v = tf.div(yy, ny) - tf.floor_div(yy, ny)
@@ -112,8 +116,9 @@ class DeformableNet(tf.keras.Model):
         i = tf.floor(xx)
         j = tf.floor(yy)
 
-        padded_points = tf.pad(points, [[0, 0], [1, 3], [1, 3], [0, 0]],
-                               'SYMMETRIC')
+        padded_displacements = tf.pad(displacements,
+                                      [[0, 0], [1, 3], [1, 3], [0, 0]],
+                                      'SYMMETRIC')
 
         def __makeGatherIndices(i, j):
             flat_i = tf.reshape(i, [-1])
@@ -135,27 +140,30 @@ class DeformableNet(tf.keras.Model):
 
             return index_stack
 
-        points_matrix = []
+        displacements_matrix = []
         for add_j in range(4):
-            points_row = []
+            displacements_row = []
             for add_i in range(4):
                 gather_idc = __makeGatherIndices(i + add_i, j + add_j)
-                points_entry = tf.gather_nd(padded_points, gather_idc)
-                points_entry = tf.reshape(points_entry,
-                                          [batch_size, new_height,
-                                           new_width, num_channels])
-                points_entry = tf.expand_dims(points_entry, -1)
-                points_row.append(points_entry)
-            points_row = tf.stack(points_row, -1)
-            points_matrix.append(points_row)
-        points_matrix = tf.concat(points_matrix, -2)
-        points_matrix = tf.cast(points_matrix, 'float32')
+                displacements_entry = tf.gather_nd(padded_displacements,
+                                                   gather_idc)
+                displacements_entry = tf.reshape(displacements_entry,
+                                                 [batch_size,
+                                                  new_height,
+                                                  new_width,
+                                                  num_channels])
+                displacements_entry = tf.expand_dims(displacements_entry, -1)
+                displacements_row.append(displacements_entry)
+            displacements_row = tf.stack(displacements_row, -1)
+            displacements_matrix.append(displacements_row)
+        displacements_matrix = tf.concat(displacements_matrix, -2)
+        displacements_matrix = tf.cast(displacements_matrix, 'float32')
 
         B_u = self.__constructBMatrix(u, batch_size, num_channels,
                                       new_height, new_width)
         B_v = self.__constructBMatrix(v, batch_size, num_channels,
                                       new_height, new_width)
-        interm = tf.matmul(B_u, points_matrix)
+        interm = tf.matmul(B_u, displacements_matrix)
         res = tf.matmul(interm, B_v, transpose_b=True)
         res = tf.reshape(res,
                          [batch_size, new_height, new_width, num_channels])
@@ -182,6 +190,7 @@ class DeformableNet(tf.keras.Model):
                              [-3, 0., 3., 0.],
                              [1., 4., 1., 0.]]]]]]),
             [batch_size, new_height, new_width, num_channels, 1, 1])
+        # TODO: Denne funker ikke for ikke-rektangulære videoer
         B_u = tf.matmul(u_vecs, coeff_matrix) * (1 / 6.)
 
         return B_u
@@ -194,6 +203,8 @@ class DeformableNet(tf.keras.Model):
                         filters=32, kernel_size=[3, 3],
                         padding='same',
                         activation=None))
+            setattr(self, f'activation_{i}',
+                    tf.keras.layers.LeakyReLU(alpha=self.alpha))
             setattr(self, f'avgpool_{i}',
                     tf.keras.layers.AveragePooling2D(pool_size=[2, 2]))
             setattr(self, f'batchnorm_{i}',
@@ -204,6 +215,7 @@ class DeformableNet(tf.keras.Model):
             filters=32, kernel_size=[3, 3],
             padding='same',
             activation=None)
+        self.finalactivation_0 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         self.finalbatchnorm_0 = tf.keras.layers.BatchNormalization()
 
@@ -211,6 +223,7 @@ class DeformableNet(tf.keras.Model):
             filters=32, kernel_size=[3, 3],
             padding='same',
             activation=None)
+        self.finalactivation_1 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         self.finalbatchnorm_1 = tf.keras.layers.BatchNormalization()
 
@@ -219,6 +232,7 @@ class DeformableNet(tf.keras.Model):
             filters=32, kernel_size=[1, 1],
             padding='same',
             activation=None)
+        self.activation1x1_0 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         self.batchnorm1x1_0 = tf.keras.layers.BatchNormalization()
 
@@ -226,6 +240,7 @@ class DeformableNet(tf.keras.Model):
             filters=32, kernel_size=[1, 1],
             padding='same',
             activation=None)
+        self.activation1x1_1 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         self.batchnorm1x1_1 = tf.keras.layers.BatchNormalization()
 
@@ -240,24 +255,24 @@ class DeformableNet(tf.keras.Model):
         prev = concatenated
         for i in range(self.num_stages):
             prev = getattr(self, f'conv_{i}')(prev)
-            prev = tf.nn.leaky_relu(prev, self.alpha)
+            prev = getattr(self, f'activation_{i}')(prev)
             prev = getattr(self, f'avgpool_{i}')(prev)
             prev = getattr(self, f'batchnorm_{i}')(prev)
 
         prev = self.finalconv_0(prev)
-        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.finalactivation_0(prev)
         prev = self.finalbatchnorm_0(prev)
 
         prev = self.finalconv_1(prev)
-        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.finalactivation_1(prev)
         prev = self.finalbatchnorm_1(prev)
 
         prev = self.conv1x1_0(prev)
-        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.activation1x1_0(prev)
         prev = self.batchnorm1x1_0(prev)
 
         prev = self.conv1x1_1(prev)
-        prev = tf.nn.leaky_relu(prev, self.alpha)
+        prev = self.activation1x1_1(prev)
         prev = self.batchnorm1x1_1(prev)
 
         out = self.cnn_out(prev)
