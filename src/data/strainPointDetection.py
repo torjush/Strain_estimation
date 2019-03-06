@@ -7,16 +7,9 @@ import skimage
 
 PROJ_ROOT = os.path.abspath(os.path.join(os.pardir, os.pardir))
 data_path = os.path.join(PROJ_ROOT, 'data/interim/sorted_clips/keep')
+processed_data_path = os.path.join(PROJ_ROOT, 'data/interim/strain_point')
 
 h5files = glob.glob(os.path.join(data_path, '*/*.h5'))
-
-
-def press(event):
-    if event.key == 'enter':
-        plt.close()
-    elif event.key == 'q':
-        plt.close()
-        quit()
 
 
 def cm2Pixel(num_cm, data_file, dim):
@@ -29,6 +22,12 @@ for h5file in h5files:
         video = data['tissue/data'][:]
         frame = video[0, :, :]
         mitral_points = data['tissue/ma_points'][0, :, :].astype('int')
+
+        times = data['tissue/times'][:]
+        ds_labels = data['tissue/ds_labels'][:]
+
+        ecg = data['ecg/ecg_data'][:]
+        ecg_times = data['ecg/ecg_times'][:]
 
         # Check for non-visible points(marked outside valid image area)
         left_point_val = frame[mitral_points[0, 1], mitral_points[0, 0]]
@@ -48,7 +47,7 @@ for h5file in h5files:
             search_box_right = np.array(
                 [[mitral_points[1, 0] - cm2Pixel(0, data, 0),
                   mitral_points[1, 0] + cm2Pixel(3, data, 0)],
-                 [mitral_points[1, 1] + cm2Pixel(1.7, data, 1),
+                 [mitral_points[1, 1] + cm2Pixel(1.9, data, 1),
                   mitral_points[1, 1] + cm2Pixel(3.5, data, 1)]]).astype('int')
         print(h5file.split('/')[-2:])
 
@@ -65,7 +64,7 @@ for h5file in h5files:
 
     # Find points
     if left_point_valid:
-        weights = np.linspace(0.5, 1, search_box_left[0, 1] - search_box_left[0, 0])
+        weights = np.linspace(0.7, 1, search_box_left[0, 1] - search_box_left[0, 0])
         weights = np.stack([weights] * (search_box_left[1, 1] - search_box_left[1, 0]))
     
         left_sobel_search_region = sobel_mean_frame[search_box_left[1, 0]:search_box_left[1, 1],
@@ -74,7 +73,7 @@ for h5file in h5files:
                                              search_box_left[0, 0]:search_box_left[0, 1]]
 
         left_search_region = left_sobel_search_region +\
-            left_mean_search_region  # + weights
+            left_mean_search_region + weights
 
         flattened_index = np.argmax(left_search_region)
         strain_point_left = np.unravel_index(flattened_index, left_search_region.shape)
@@ -82,8 +81,8 @@ for h5file in h5files:
                                       strain_point_left[0] + search_box_left[1, 0]])
 
     if right_point_valid:
-        weights = np.linspace(1, 0.5, search_box_left[0, 1] - search_box_left[0, 0])
-        weights = np.stack([weights] * (search_box_left[1, 1] - search_box_left[1, 0]))
+        weights = np.linspace(1, 0.7, search_box_right[0, 1] - search_box_right[0, 0])
+        weights = np.stack([weights] * (search_box_right[1, 1] - search_box_right[1, 0]))
 
         right_sobel_search_region = sobel_mean_frame[search_box_right[1, 0]:search_box_right[1, 1],
                                                      search_box_right[0, 0]:search_box_right[0, 1]]
@@ -91,12 +90,47 @@ for h5file in h5files:
                                               search_box_right[0, 0]:search_box_right[0, 1]]
 
         right_search_region = right_sobel_search_region +\
-            right_mean_search_region  # + weights
+            right_mean_search_region + weights
 
         flattened_index = np.argmax(right_search_region)
         strain_point_right = np.unravel_index(flattened_index, right_search_region.shape)
         strain_point_right = np.array([strain_point_right[1] + search_box_right[0, 0],
                                        strain_point_right[0] + search_box_right[1, 0]])
+
+    def savePoints():
+        file_id = h5file.split('/')[-2:]
+        if not os.path.exists(os.path.join(processed_data_path, file_id[0])):
+            os.makedirs(os.path.join(processed_data_path, file_id[0]))
+        file_id = os.path.join(file_id[0], file_id[1])
+
+        with h5py.File(os.path.join(processed_data_path, file_id), 'w') as new_data:
+            new_data.create_dataset('tissue/data', data=video)
+            new_data.create_dataset('tissue/times', data=times)
+            new_data.create_dataset('tissue/ds_labels', data=ds_labels)
+            if left_point_valid:
+                left_points = np.vstack((mitral_points[0, :], strain_point_left))
+            else:
+                left_points = np.empty(0)
+            new_data.create_dataset('tissue/left_points', data=left_points)
+
+            if right_point_valid:
+                right_points = np.vstack((mitral_points[1, :], strain_point_right))
+            else:
+                right_points = np.empty(0)
+            new_data.create_dataset('tissue/right_points', data=right_points)
+
+            new_data.create_dataset('ecg/ecg_data', data=ecg)
+            new_data.create_dataset('ecg/ecg_times', data=ecg_times)
+
+    def press(event):
+        if event.key == 'enter':
+            plt.close()
+            savePoints()
+        elif event.key == 'backspace':
+            plt.close()
+        elif event.key == 'q':
+            plt.close()
+            quit()
 
     fig, ax = plt.subplots(ncols=3, figsize=(16, 10))
     ax[0].imshow(frame, cmap='Greys_r')
