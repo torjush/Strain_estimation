@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+import numpy as np
 
 class DeformableNet(tf.keras.Model):
     def __init__(self, num_conv_layers, leakage=0.2):
@@ -8,7 +8,7 @@ class DeformableNet(tf.keras.Model):
         self.alpha = leakage
         self.__buildCNN()
 
-    def call(self, fixed, moving, train=True):
+    def call(self, fixed, moving):
         height = int(moving.shape[1])
         width = int(moving.shape[2])
         batch_size = int(moving.shape[0])
@@ -17,27 +17,43 @@ class DeformableNet(tf.keras.Model):
         interpolated_displacements = self.bSplineInterpolation(
             displacements, height, width)
 
-        if train:
-            # make a grid of original points
-            xx, yy = self.__makeMeshgrids(width, height, width, height)
-            grid = tf.concat([tf.reshape(xx, [1, -1]),
-                              tf.reshape(yy, [1, -1])], axis=0)
-            grid = tf.stack([grid] * batch_size)
+        # make a grid of original points
+        xx, yy = self.__makeMeshgrids(width, height, width, height)
+        grid = tf.concat([tf.reshape(xx, [1, -1]),
+                          tf.reshape(yy, [1, -1])], axis=0)
+        grid = tf.stack([grid] * batch_size)
 
-            # Add the interpolated displacements to the grid
-            flat_grid = tf.reshape(grid, [batch_size, 2, -1])
-            flat_displacements = tf.reshape(
-                tf.transpose(interpolated_displacements, [0, 3, 1, 2]),
-                [batch_size, 2, -1])
+        # Add the interpolated displacements to the grid
+        flat_grid = tf.reshape(grid, [batch_size, 2, -1])
+        flat_displacements = tf.reshape(
+            tf.transpose(interpolated_displacements, [0, 3, 1, 2]),
+            [batch_size, 2, -1])
 
-            warped_grid = tf.add(flat_displacements, flat_grid)
+        warped_grid = tf.add(flat_displacements, flat_grid)
 
-            warped = self.sampleBilinear(fixed, warped_grid,
-                                         height, width, batch_size)
+        warped = self.sampleBilinear(fixed, warped_grid,
+                                     height, width, batch_size)
 
-            return warped
-        else:
-            return interpolated_displacements
+        return warped, tf.reshape(warped_grid, [-1, 2, height, width])
+
+    def trackPoint(self, fixed, moving, point):
+        warped, warped_grid = self.call(fixed, moving)
+        x_coord = np.round(point[0]).astype(int)
+        y_coord = np.round(point[1]).astype(int)
+
+        num_frames = fixed.shape[0] + 1
+        tracked_points = np.zeros((num_frames, 2))
+        tracked_points[0, 0] = x_coord
+        tracked_points[0, 1] = y_coord
+        for frame_num in range(num_frames - 1):
+            x_coord = warped_grid[frame_num, 0, y_coord, x_coord]
+            y_coord = warped_grid[frame_num, 1, y_coord, x_coord]
+            x_coord = np.round(x_coord).astype(int)
+            y_coord = np.round(y_coord).astype(int)
+            tracked_points[frame_num + 1, 0] = x_coord
+            tracked_points[frame_num + 1, 1] = y_coord
+
+        return tracked_points
 
     def __makeMeshgrids(self, nx, ny, width, height):
         x_range = tf.linspace(0., nx - 1, width)
@@ -110,15 +126,15 @@ class DeformableNet(tf.keras.Model):
 
         xx, yy = self.__makeMeshgrids(nx, ny, new_width, new_height)
 
-        u = tf.div(xx, nx) - tf.floor_div(xx, nx)
-        v = tf.div(yy, ny) - tf.floor_div(yy, ny)
+        u = tf.div(xx, nx)
+        v = tf.div(yy, ny)
 
         i = tf.floor(xx)
         j = tf.floor(yy)
 
         padded_displacements = tf.pad(displacements,
                                       [[0, 0], [1, 3], [1, 3], [0, 0]],
-                                      'SYMMETRIC')
+                                      'CONSTANT')
 
         def __makeGatherIndices(i, j):
             flat_i = tf.reshape(i, [-1])
@@ -149,9 +165,11 @@ class DeformableNet(tf.keras.Model):
                                                    gather_idc)
                 displacements_entry = tf.reshape(displacements_entry,
                                                  [batch_size,
+                                                  num_channels,
                                                   new_height,
-                                                  new_width,
-                                                  num_channels])
+                                                  new_width])
+                displacements_entry = tf.transpose(displacements_entry,
+                                                   [0, 2, 3, 1])
                 displacements_entry = tf.expand_dims(displacements_entry, -1)
                 displacements_row.append(displacements_entry)
             displacements_row = tf.stack(displacements_row, -1)
