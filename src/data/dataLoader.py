@@ -33,9 +33,6 @@ class DataLoader():
             moving = tf.constant(data['tissue/data'][:][1:, :, :, None],
                                  dtype='float32')
 
-        self.width = fixed.shape[2]
-        self.height = fixed.shape[1]
-
         # Comment out for overfitting experiment
         # if self.current_index == len(self.h5files) - 1:
         #     self.current_index = 0
