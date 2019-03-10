@@ -20,7 +20,7 @@ def cm2Pixel(num_cm, data_file, dim):
 for h5file in h5files:
     with h5py.File(h5file) as data:
         video = data['tissue/data'][:]
-        frame = video[0, :, :]
+        frame = video[0, :, :].copy()
         mitral_points = data['tissue/ma_points'][0, :, :].astype('int')
 
         times = data['tissue/times'][:]
