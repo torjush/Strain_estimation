@@ -24,6 +24,7 @@ def ultraSoundAnimation(video, points=None, fps=24, with_colorbar=False):
                                                 played in a notebook
     """
 
+    # TODO: Support different number of points
     fig, ax = plt.subplots()
     line = ax.imshow(video[0, :, :], cmap='Greys_r')
     if points is not None:
