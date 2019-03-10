@@ -1,6 +1,7 @@
 import tensorflow as tf
 import numpy as np
 
+
 class DeformableNet(tf.keras.Model):
     def __init__(self, num_conv_layers, leakage=0.2):
         super(DeformableNet, self).__init__(name='deformable_net')
@@ -14,7 +15,7 @@ class DeformableNet(tf.keras.Model):
         batch_size = int(moving.shape[0])
 
         displacements = self.__runCNN(fixed, moving)
-        interpolated_displacements = self.bSplineInterpolation(
+        self.interpolated_displacements = self.bSplineInterpolation(
             displacements, height, width)
 
         # make a grid of original points
@@ -26,17 +27,18 @@ class DeformableNet(tf.keras.Model):
         # Add the interpolated displacements to the grid
         flat_grid = tf.reshape(grid, [batch_size, 2, -1])
         flat_displacements = tf.reshape(
-            tf.transpose(interpolated_displacements, [0, 3, 1, 2]),
+            tf.transpose(self.interpolated_displacements, [0, 3, 1, 2]),
             [batch_size, 2, -1])
 
         warped_grid = tf.add(flat_displacements, flat_grid)
 
-        warped = self.sampleBilinear(fixed, warped_grid,
+        warped = self.sampleBilinear(moving, warped_grid,
                                      height, width, batch_size)
 
         return warped, tf.reshape(warped_grid, [-1, 2, height, width])
 
     def trackPoint(self, fixed, moving, point):
+        # TODO: Track multiple points
         warped, warped_grid = self.call(fixed, moving)
         x_coord = np.round(point[0]).astype(int)
         y_coord = np.round(point[1]).astype(int)
@@ -46,10 +48,15 @@ class DeformableNet(tf.keras.Model):
         tracked_points[0, 0] = x_coord
         tracked_points[0, 1] = y_coord
         for frame_num in range(num_frames - 1):
-            x_coord = warped_grid[frame_num, 0, y_coord, x_coord]
-            y_coord = warped_grid[frame_num, 1, y_coord, x_coord]
-            x_coord = np.round(x_coord).astype(int)
-            y_coord = np.round(y_coord).astype(int)
+            # Find points in next frame
+            next_x_coord = warped_grid[frame_num, 0, y_coord, x_coord]
+            next_y_coord = warped_grid[frame_num, 1, y_coord, x_coord]
+            next_x_coord = np.round(next_x_coord).astype(int)
+            next_y_coord = np.round(next_y_coord).astype(int)
+
+            # Update current points
+            x_coord = next_x_coord
+            y_coord = next_y_coord
             tracked_points[frame_num + 1, 0] = x_coord
             tracked_points[frame_num + 1, 1] = y_coord
 
@@ -208,7 +215,7 @@ class DeformableNet(tf.keras.Model):
                              [-3, 0., 3., 0.],
                              [1., 4., 1., 0.]]]]]]),
             [batch_size, new_height, new_width, num_channels, 1, 1])
-        # TODO: Denne funker ikke for ikke-rektangulære videoer
+
         B_u = tf.matmul(u_vecs, coeff_matrix) * (1 / 6.)
 
         return B_u
@@ -220,47 +227,43 @@ class DeformableNet(tf.keras.Model):
                     tf.keras.layers.Conv2D(
                         filters=32, kernel_size=[3, 3],
                         padding='same',
-                        activation=None))
+                        activation=None, use_bias=False))
+            setattr(self, f'batchnorm_{i}',
+                    tf.keras.layers.BatchNormalization())
             setattr(self, f'activation_{i}',
                     tf.keras.layers.LeakyReLU(alpha=self.alpha))
             setattr(self, f'avgpool_{i}',
                     tf.keras.layers.AveragePooling2D(pool_size=[2, 2]))
-            setattr(self, f'batchnorm_{i}',
-                    tf.keras.layers.BatchNormalization())
 
         # Final convolutions
         self.finalconv_0 = tf.keras.layers.Conv2D(
             filters=32, kernel_size=[3, 3],
             padding='same',
-            activation=None)
-        self.finalactivation_0 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
-
+            activation=None, use_bias=False)
         self.finalbatchnorm_0 = tf.keras.layers.BatchNormalization()
+        self.finalactivation_0 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         self.finalconv_1 = tf.keras.layers.Conv2D(
             filters=32, kernel_size=[3, 3],
             padding='same',
-            activation=None)
-        self.finalactivation_1 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
-
+            activation=None, use_bias=False)
         self.finalbatchnorm_1 = tf.keras.layers.BatchNormalization()
+        self.finalactivation_1 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         # 1x1 convolutions
         self.conv1x1_0 = tf.keras.layers.Conv2D(
             filters=32, kernel_size=[1, 1],
             padding='same',
-            activation=None)
-        self.activation1x1_0 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
-
+            activation=None, use_bias=False)
         self.batchnorm1x1_0 = tf.keras.layers.BatchNormalization()
+        self.activation1x1_0 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         self.conv1x1_1 = tf.keras.layers.Conv2D(
             filters=32, kernel_size=[1, 1],
             padding='same',
-            activation=None)
-        self.activation1x1_1 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
-
+            activation=None, use_bias=False)
         self.batchnorm1x1_1 = tf.keras.layers.BatchNormalization()
+        self.activation1x1_1 = tf.keras.layers.LeakyReLU(alpha=self.alpha)
 
         self.cnn_out = tf.keras.layers.Conv2D(
             filters=2, kernel_size=[1, 1],
@@ -273,25 +276,25 @@ class DeformableNet(tf.keras.Model):
         prev = concatenated
         for i in range(self.num_stages):
             prev = getattr(self, f'conv_{i}')(prev)
+            prev = getattr(self, f'batchnorm_{i}')(prev)
             prev = getattr(self, f'activation_{i}')(prev)
             prev = getattr(self, f'avgpool_{i}')(prev)
-            prev = getattr(self, f'batchnorm_{i}')(prev)
 
         prev = self.finalconv_0(prev)
-        prev = self.finalactivation_0(prev)
         prev = self.finalbatchnorm_0(prev)
+        prev = self.finalactivation_0(prev)
 
         prev = self.finalconv_1(prev)
-        prev = self.finalactivation_1(prev)
         prev = self.finalbatchnorm_1(prev)
+        prev = self.finalactivation_1(prev)
 
         prev = self.conv1x1_0(prev)
-        prev = self.activation1x1_0(prev)
         prev = self.batchnorm1x1_0(prev)
+        prev = self.activation1x1_0(prev)
 
         prev = self.conv1x1_1(prev)
-        prev = self.activation1x1_1(prev)
         prev = self.batchnorm1x1_1(prev)
+        prev = self.activation1x1_1(prev)
 
         out = self.cnn_out(prev)
 
