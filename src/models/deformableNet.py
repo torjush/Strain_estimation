@@ -184,41 +184,83 @@ class DeformableNet(tf.keras.Model):
         displacements_matrix = tf.concat(displacements_matrix, -2)
         displacements_matrix = tf.cast(displacements_matrix, 'float32')
 
-        B_u = self.__constructBMatrix(u, batch_size, num_channels,
-                                      new_height, new_width)
-        B_v = self.__constructBMatrix(v, batch_size, num_channels,
-                                      new_height, new_width)
-        interm = tf.matmul(B_u, displacements_matrix)
-        res = tf.matmul(interm, B_v, transpose_b=True)
-        res = tf.reshape(res,
-                         [batch_size, new_height, new_width, num_channels])
+        coeff_matrix = tf.constant([[-1., 3., -3., 1.],
+                                    [3., -6., 3., 0.],
+                                    [-3, 0., 3., 0.],
+                                    [1., 4., 1., 0.]])
+
+        u_vecs = self.__BVectors(u)
+        v_vecs = self.__BVectors(v)
+        B_u = tf.einsum('ijk, kl->ijl', u_vecs, coeff_matrix)
+        B_v = tf.einsum('ijk, kl->ijl', v_vecs, coeff_matrix)
+
+        # Use einsum to avoid tiling, saving memory
+        interm_u = tf.einsum('jkm, ijklmn->ijkln', B_u, displacements_matrix)
+        interm_v = tf.einsum('ijklmn, jkn->ijklm', displacements_matrix, B_v)
+
+        # Result of interpolation
+        res = tf.einsum('ijkln, jkn->ijkl', interm_u, B_v)
+
+        # Calculate differentials for bending penalty
+        dx_dx_B_u = self.__doubleDiffBVectors(u)
+        dy_dy_B_v = self.__doubleDiffBVectors(v)
+
+        dx_dx = ((1 / 36) *
+                 tf.einsum('jkm, ijklm->ijkl', dx_dx_B_u, interm_v))
+
+        dy_dy = ((1 / 36) *
+                 tf.einsum('ijkln, jkn->ijkl', interm_u, dy_dy_B_v))
+
+        dx_B_u = self.__diffBVectors(u)
+        dy_B_v = self.__diffBVectors(v)
+
+        cross_interm = tf.einsum('jkm, ijklmn->ijkln',
+                                 dx_B_u, displacements_matrix)
+        dx_dy = ((1 / 36) *
+                 tf.einsum('ijkln, jkn->ijkl', cross_interm, dy_B_v))
+
+        self.bending_penalty = self.__bendingPenalty(dx_dx, dy_dy, dx_dy)
 
         return res
 
-    def __constructBMatrix(self, u, batch_size, num_channels,
-                           new_height, new_width):
-        u = tf.expand_dims(u, 0)
+    def __bendingPenalty(self, dx_dx, dy_dy, dx_dy):
+        dx_dx_2 = tf.reduce_sum(tf.square(dx_dx), axis=-1)
+        dy_dy_2 = tf.reduce_sum(tf.square(dy_dy), axis=-1)
+        dx_dy_2 = tf.reduce_sum(tf.square(dx_dy), axis=-1)
+
+        summed = dx_dx_2 + dy_dy_2 + 2 * dx_dy_2
+
+        # Approximate integrals by summing
+        per_img_pen = tf.reduce_sum(summed, axis=[1, 2])
+
+        return tf.reduce_mean(per_img_pen)
+
+    def __BVectors(self, u):
         u = tf.expand_dims(u, -1)
-        u = tf.tile(u, [batch_size, 1, 1, num_channels])
-        expanded_u = tf.expand_dims(u, -1)
-        # Construct vectors [u^3 u^2 u 1]^T
-        u_vecs = tf.concat([tf.pow(expanded_u, 3),
-                            tf.square(expanded_u),
-                            expanded_u,
-                            tf.ones_like(expanded_u)],
+        B_vecs = tf.concat([tf.pow(u, 3),
+                            tf.square(u),
+                            u,
+                            tf.ones_like(u)],
                            axis=-1)
-        # Make them row vectors
-        u_vecs = tf.expand_dims(u_vecs, -2)
-        coeff_matrix = tf.tile(
-            tf.constant([[[[[[-1., 3., -3., 1.],
-                             [3., -6., 3., 0.],
-                             [-3, 0., 3., 0.],
-                             [1., 4., 1., 0.]]]]]]),
-            [batch_size, new_height, new_width, num_channels, 1, 1])
+        return B_vecs
 
-        B_u = tf.matmul(u_vecs, coeff_matrix) * (1 / 6.)
+    def __doubleDiffBVectors(self, u):
+        u = tf.expand_dims(u, -1)
+        B_vecs = tf.concat([-6 * u + 6,
+                            18 * u - 12,
+                            -18 * u + 6,
+                            6 * u],
+                           axis=-1)
+        return B_vecs
 
-        return B_u
+    def __diffBVectors(self, u):
+        u = tf.expand_dims(u, -1)
+        B_vecs = tf.concat([-3 * tf.square(u) + 6 * u - 3,
+                            9 * tf.square(u) - 12 * u,
+                            -9 * tf.square(u) + 6 * u + 3,
+                            3*tf.square(u)],
+                           axis=-1)
+        return B_vecs
 
     def __buildCNN(self):
         # Convolutions + downsampling
