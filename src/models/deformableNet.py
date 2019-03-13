@@ -38,7 +38,6 @@ class DeformableNet(tf.keras.Model):
         return warped, tf.reshape(warped_grid, [-1, 2, height, width])
 
     def trackPoints(self, fixed, moving, points):
-        # TODO: Track multiple points
         num_frames = fixed.shape[0] + 1
         tracked_points = np.zeros((num_frames, points.shape[0], 2))
 
