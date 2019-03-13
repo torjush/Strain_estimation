@@ -37,28 +37,30 @@ class DeformableNet(tf.keras.Model):
 
         return warped, tf.reshape(warped_grid, [-1, 2, height, width])
 
-    def trackPoint(self, fixed, moving, point):
+    def trackPoints(self, fixed, moving, points):
         # TODO: Track multiple points
-        warped, warped_grid = self.call(fixed, moving)
-        x_coord = np.round(point[0]).astype(int)
-        y_coord = np.round(point[1]).astype(int)
-
         num_frames = fixed.shape[0] + 1
-        tracked_points = np.zeros((num_frames, 2))
-        tracked_points[0, 0] = x_coord
-        tracked_points[0, 1] = y_coord
-        for frame_num in range(num_frames - 1):
-            # Find points in next frame
-            next_x_coord = warped_grid[frame_num, 0, y_coord, x_coord]
-            next_y_coord = warped_grid[frame_num, 1, y_coord, x_coord]
-            next_x_coord = np.round(next_x_coord).astype(int)
-            next_y_coord = np.round(next_y_coord).astype(int)
+        tracked_points = np.zeros((num_frames, points.shape[0], 2))
 
-            # Update current points
-            x_coord = next_x_coord
-            y_coord = next_y_coord
-            tracked_points[frame_num + 1, 0] = x_coord
-            tracked_points[frame_num + 1, 1] = y_coord
+        warped, warped_grid = self.call(fixed, moving)
+        for j in range(points.shape[0]):
+            x_coord = np.round(points[j, 0]).astype(int)
+            y_coord = np.round(points[j, 1]).astype(int)
+
+            tracked_points[0, j, 0] = x_coord
+            tracked_points[0, j, 1] = y_coord
+            for frame_num in range(num_frames - 1):
+                # Find points in next frame
+                next_x_coord = warped_grid[frame_num, 0, y_coord, x_coord]
+                next_y_coord = warped_grid[frame_num, 1, y_coord, x_coord]
+                next_x_coord = np.round(next_x_coord).astype(int)
+                next_y_coord = np.round(next_y_coord).astype(int)
+
+                # Update current points
+                x_coord = next_x_coord
+                y_coord = next_y_coord
+                tracked_points[frame_num + 1, j, 0] = x_coord
+                tracked_points[frame_num + 1, j, 1] = y_coord
 
         return tracked_points
 

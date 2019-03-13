@@ -7,6 +7,7 @@ from misc.notebookHelpers import ultraSoundAnimation
 import argparse
 import os
 import h5py
+import glob
 
 tf.enable_eager_execution()
 
@@ -33,7 +34,7 @@ args = parser.parse_args()
 savedir = os.path.join(args.output_path, 'models',
                        args.experiment_id)
 
-data_loader = DataLoader(args.data_path, shuffle=False)
+# data_loader = DataLoader(args.data_path, shuffle=False)
 
 defnet = DeformableNet(args.num_downsampling_layers, args.leakage)
 try:
@@ -43,17 +44,37 @@ except (tf.errors.InvalidArgumentError, tf.errors.NotFoundError):
     print('No previous weights found or weights couldn\'t be loaded')
     exit(-1)
 
-fixed, moving = data_loader.loadSample()
-with h5py.File(data_loader.h5files[0]) as data:
-    left_point = data['tissue/left_points'][0, :]
-    tracked_left_points = defnet.trackPoint(fixed, moving, left_point)
-    right_point = data['tissue/right_points'][0, :]
-    tracked_right_points = defnet.trackPoint(fixed, moving, right_point)
+# fixed, moving = data_loader.loadSample()
 
-    tracked_points = np.concatenate((tracked_left_points[:, None, :], tracked_right_points[:, None, :]), axis=1)
-    video = data['tissue/data'][:]
+h5file = glob.glob(args.data_path + '/*/*.h5')[0]
+with h5py.File(h5file) as data:
+    fixed = tf.constant(data['tissue/data'][:][:15, :, :, None] / 255.,
+                        dtype='float32')
+    moving = tf.constant(data['tissue/data'][:][1:16, :, :, None] / 255.,
+                         dtype='float32')
+
+    points = np.concatenate((data['tissue/left_points'][:], data['tissue/right_points']),
+                            axis=0)
+    tracked_points = defnet.trackPoints(fixed, moving, points)
+
+    # left_point = data['tissue/left_points'][0, :]
+    # tracked_left_points = defnet.trackPoint(fixed, moving, left_point)
+    # left_strain_point = data['tissue/left_points'][1, :]
+    # tracked_left_strain_points = defnet.trackPoint(fixed, moving,
+    #                                                left_strain_point)
+    # right_point = data['tissue/right_points'][0, :]
+    # tracked_right_points = defnet.trackPoint(fixed, moving, right_point)
+    # right_strain_point = data['tissue/right_points'][1, :]
+    # tracked_right_strain_points = defnet.trackPoint(fixed, moving,
+    #                                                 right_strain_point)
+
+    # tracked_points = np.concatenate((tracked_left_points[:, None, :],
+    #                                  tracked_left_strain_points[:, None, :],
+    #                                  tracked_right_points[:, None, :],
+    #                                  tracked_right_strain_points[:, None, :]),
+    #                                 axis=1)
+    video = data['tissue/data'][:16, :, :]
     fps = 1 / (data['tissue/times'][3] - data['tissue/times'][2])
 
     anim = ultraSoundAnimation(video, points=tracked_points, fps=fps)
-    anim.save('ma_point_track_test.mp4')
-
+    anim.save(os.path.join(args.output_path, 'ma_point_track_test.mp4'))
