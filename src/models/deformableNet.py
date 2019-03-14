@@ -19,8 +19,8 @@ class DeformableNet(tf.keras.Model):
             displacements, height, width)
 
         # make a grid of original points
-        xx, yy = tf.meshgrid(tf.linspace(0., width - 1, width),
-                             tf.linspace(0., height - 1, height))
+        xx, yy = tf.meshgrid(tf.range(0., width),
+                             tf.range(0., height))
         grid = tf.concat([tf.reshape(xx, [1, -1]),
                           tf.reshape(yy, [1, -1])], axis=0)
         grid = tf.stack([grid] * batch_size)
@@ -146,9 +146,8 @@ class DeformableNet(tf.keras.Model):
         i = tf.floor(xx)
         j = tf.floor(yy)
 
-        # TODO: Sjekk disse
-        u = tf.div(xx, nx)
-        v = tf.div(yy, ny)
+        u = xx - i
+        v = yy - j
 
         padded_displacements = tf.pad(displacements,
                                       [[0, 0], [1, 3], [1, 3], [0, 0]],
@@ -198,7 +197,7 @@ class DeformableNet(tf.keras.Model):
         coeff_matrix = tf.constant([[-1., 3., -3., 1.],
                                     [3., -6., 3., 0.],
                                     [-3, 0., 3., 0.],
-                                    [1., 4., 1., 0.]])
+                                    [1., 4., 1., 0.]]) / 6.
 
         u_vecs = self.__BVectors(u)
         v_vecs = self.__BVectors(v)
