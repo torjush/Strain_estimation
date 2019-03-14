@@ -19,7 +19,8 @@ class DeformableNet(tf.keras.Model):
             displacements, height, width)
 
         # make a grid of original points
-        xx, yy = self.__makeMeshgrids(width, height, width, height)
+        xx, yy = tf.meshgrid(tf.linspace(0., width - 1, width),
+                             tf.linspace(0., height - 1, height))
         grid = tf.concat([tf.reshape(xx, [1, -1]),
                           tf.reshape(yy, [1, -1])], axis=0)
         grid = tf.stack([grid] * batch_size)
@@ -64,11 +65,19 @@ class DeformableNet(tf.keras.Model):
         return tracked_points
 
     def __makeMeshgrids(self, nx, ny, width, height):
-        x_range = tf.linspace(0., nx - 1, width)
-        y_range = tf.linspace(0., ny - 1, height)
+        x_num_between = tf.floor_div(width, nx) - 1
+        y_num_between = tf.floor_div(height, ny) - 1
+
+        x_step = 1 / tf.floor_div(width, nx)
+        y_step = 1 / tf.floor_div(height, ny)
+
+        x_range = tf.range(0., nx + x_step * x_num_between, x_step)[:width]
+        x_range = tf.clip_by_value(x_range, 0., nx - 1)
+
+        y_range = tf.range(0., ny + y_step * y_num_between, y_step)[:height]
+        y_range = tf.clip_by_value(y_range, 0., ny - 1)
 
         xx, yy = tf.meshgrid(x_range, y_range)
-
         return xx, yy
 
     def sampleBilinear(self, img, warped_grid, height, width,
@@ -134,11 +143,12 @@ class DeformableNet(tf.keras.Model):
 
         xx, yy = self.__makeMeshgrids(nx, ny, new_width, new_height)
 
-        u = tf.div(xx, nx)
-        v = tf.div(yy, ny)
-
         i = tf.floor(xx)
         j = tf.floor(yy)
+
+        # TODO: Sjekk disse
+        u = tf.div(xx, nx)
+        v = tf.div(yy, ny)
 
         padded_displacements = tf.pad(displacements,
                                       [[0, 0], [1, 3], [1, 3], [0, 0]],
