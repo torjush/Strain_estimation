@@ -8,6 +8,7 @@ class DeformableNet(tf.keras.Model):
         self.num_stages = num_conv_layers
         self.alpha = leakage
         self.__buildCNN()
+        self.__bSplineKernels()
 
     def call(self, fixed, moving):
         height = int(moving.shape[1])
@@ -134,65 +135,24 @@ class DeformableNet(tf.keras.Model):
 
         return warped
 
-    def bSplineInterpolation(self, displacements, new_height, new_width):
-        # TODO: Implement using transposed convolutions and fixed kernels
-        nx = tf.cast(displacements.shape[2], 'float32')
-        ny = tf.cast(displacements.shape[1], 'float32')
-        num_channels = displacements.shape[3]
-        batch_size = displacements.shape[0]
+    def __bSplineKernels(self):
+        upsample = self.num_stages * 2
+        step = 1 / upsample
+        u = tf.linspace(0., (upsample - 1) * step, upsample)
+        v = tf.linspace(0., (upsample - 1) * step, upsample)
 
-        xx, yy = self.__makeMeshgrids(nx, ny, new_width, new_height)
+        def expandKernels(kernel, num_channels):
+            # Nasty way of getting the filter to the shapes that
+            # tf.nn.conv2d_transpose needs
+            full_kernel = (lambda kernel=kernel, num_channels=num_channels:
+                           [[[[kernel[i, j].numpy() if k == l else 0.
+                               for k in range(num_channels)]
+                              for l in range(num_channels)]
+                             for j in range(kernel.shape[1])]
+                            for i in range(kernel.shape[0])])()
+            full_kernel = tf.constant(full_kernel)
 
-        i = tf.floor(xx)
-        j = tf.floor(yy)
-
-        u = xx - i
-        v = yy - j
-
-        padded_displacements = tf.pad(displacements,
-                                      [[0, 0], [1, 3], [1, 3], [0, 0]],
-                                      'CONSTANT')
-
-        def __makeGatherIndices(i, j):
-            flat_i = tf.reshape(i, [-1])
-            flat_j = tf.reshape(j, [-1])
-
-            index_stack = []
-            # TODO: Fiks denne med tf.range i stedet for loops
-            for batch in range(batch_size):
-                for channel in range(num_channels):
-                    stacked = tf.stack([batch * tf.ones_like(flat_i),
-                                        flat_j,
-                                        flat_i,
-                                        channel * tf.ones_like(flat_i)])
-                    index_stack.append(stacked)
-
-            index_stack = tf.concat(index_stack, axis=1)
-            index_stack = tf.transpose(index_stack)
-            index_stack = tf.cast(index_stack, 'int32')
-
-            return index_stack
-
-        displacements_matrix = []
-        for add_j in range(4):
-            displacements_row = []
-            for add_i in range(4):
-                gather_idc = __makeGatherIndices(i + add_i, j + add_j)
-                displacements_entry = tf.gather_nd(padded_displacements,
-                                                   gather_idc)
-                displacements_entry = tf.reshape(displacements_entry,
-                                                 [batch_size,
-                                                  num_channels,
-                                                  new_height,
-                                                  new_width])
-                displacements_entry = tf.transpose(displacements_entry,
-                                                   [0, 2, 3, 1])
-                displacements_entry = tf.expand_dims(displacements_entry, -1)
-                displacements_row.append(displacements_entry)
-            displacements_row = tf.stack(displacements_row, -1)
-            displacements_matrix.append(displacements_row)
-        displacements_matrix = tf.concat(displacements_matrix, -2)
-        displacements_matrix = tf.cast(displacements_matrix, 'float32')
+            return full_kernel
 
         coeff_matrix = tf.constant([[-1., 3., -3., 1.],
                                     [3., -6., 3., 0.],
@@ -201,36 +161,95 @@ class DeformableNet(tf.keras.Model):
 
         u_vecs = self.__BVectors(u)
         v_vecs = self.__BVectors(v)
-        B_u = tf.einsum('ijk, kl->ijl', u_vecs, coeff_matrix)
-        B_v = tf.einsum('ijk, kl->ijl', v_vecs, coeff_matrix)
 
-        # Use einsum to avoid tiling, saving memory
-        interm_u = tf.einsum('jkm, ijklmn->ijkln', B_u, displacements_matrix)
-        interm_v = tf.einsum('ijklmn, jkn->ijklm', displacements_matrix, B_v)
+        B_u = tf.einsum('jk, kl->jl', u_vecs, coeff_matrix)
+        B_v = tf.einsum('jk, kl->jl', v_vecs, coeff_matrix)
 
-        # Result of interpolation
-        res = tf.einsum('ijkln, jkn->ijkl', interm_u, B_v)
+        u_kernel = tf.reshape(tf.transpose(B_u[::-1, :]), [-1])
+        v_kernel = tf.reshape(tf.transpose(B_v[::-1, :]), [-1])
 
-        # Calculate differentials for bending penalty
-        dx_dx_B_u = self.__doubleDiffBVectors(u)
-        dy_dy_B_v = self.__doubleDiffBVectors(v)
+        kernel = tf.matmul(tf.expand_dims(v_kernel, -1),
+                           tf.expand_dims(u_kernel, 0))
+        self.b_spline_kernel = expandKernels(kernel, 2)
 
-        dx_dx = ((1 / 36) *
-                 tf.einsum('jkm, ijklm->ijkl', dx_dx_B_u, interm_v))
+        # Differentials for bending penalty
+        dxdx_B_u = tf.einsum('jk, kl->jl',
+                             self.__doubleDiffBVectors(u), coeff_matrix)
+        dxdx_u_kernel = tf.reshape(tf.transpose(dxdx_B_u[::-1, :]), [-1])
+        dxdx_kernel = tf.matmul(tf.expand_dims(v_kernel, -1),
+                                tf.expand_dims(dxdx_u_kernel, 0))
+        self.dxdx_kernel = expandKernels(dxdx_kernel, 2)
 
-        dy_dy = ((1 / 36) *
-                 tf.einsum('ijkln, jkn->ijkl', interm_u, dy_dy_B_v))
+        dydy_B_v = tf.einsum('jk, kl->jl',
+                             self.__doubleDiffBVectors(v), coeff_matrix)
+        dydy_v_kernel = tf.reshape(tf.transpose(dydy_B_v[::-1, :]), [-1])
+        dydy_kernel = tf.matmul(tf.expand_dims(dydy_v_kernel, -1),
+                                tf.expand_dims(u_kernel, 0))
+        self.dydy_kernel = expandKernels(dydy_kernel, 2)
 
-        dx_B_u = self.__diffBVectors(u)
-        dy_B_v = self.__diffBVectors(v)
+        dx_B_u = tf.einsum('jk, kl->jl',
+                           self.__diffBVectors(u), coeff_matrix)
+        dx_u_kernel = tf.reshape(tf.transpose(dx_B_u[::-1, :]), [-1])
+        dy_B_v = tf.einsum('jk, kl->jl',
+                           self.__diffBVectors(v), coeff_matrix)
+        dy_v_kernel = tf.reshape(tf.transpose(dy_B_v[::-1, :]), [-1])
+        dxdy_kernel = tf.matmul(tf.expand_dims(dy_v_kernel, -1),
+                                tf.expand_dims(dx_u_kernel, 0))
+        self.dxdy_kernel = expandKernels(dxdy_kernel, 2)
 
-        cross_interm = tf.einsum('jkm, ijklmn->ijkln',
-                                 dx_B_u, displacements_matrix)
-        dx_dy = ((1 / 36) *
-                 tf.einsum('ijkln, jkn->ijkl', cross_interm, dy_B_v))
+    def bSplineInterpolation(self, displacements, new_height, new_width):
+        num_channels = displacements.shape[3]
+        batch_size = displacements.shape[0]
+
+        upsample = self.num_stages * 2
+
+        # Deal with odd dimensions
+        if new_height % 2 == 1:
+            y_pad = 1
+        else:
+            y_pad = 0
+        if new_width % 2 == 1:
+            x_pad = 1
+        else:
+            x_pad = 0
+        displacements = tf.pad(displacements,
+                               [[0, 0], [0, y_pad], [0, x_pad], [0, 0]])
+
+        # Interpolate vector field
+        res = tf.nn.conv2d_transpose(displacements, self.b_spline_kernel,
+                                     output_shape=[batch_size,
+                                                   new_height,
+                                                   new_width,
+                                                   num_channels],
+                                     strides=[1, upsample, upsample, 1],
+                                     padding='SAME')
+
+        # Differentials for bending penalty
+        dx_dx = tf.nn.conv2d_transpose(displacements, self.dxdx_kernel,
+                                       output_shape=[batch_size,
+                                                     new_height,
+                                                     new_width,
+                                                     num_channels],
+                                       strides=[1, upsample, upsample, 1],
+                                       padding='SAME')
+
+        dy_dy = tf.nn.conv2d_transpose(displacements, self.dydy_kernel,
+                                       output_shape=[batch_size,
+                                                     new_height,
+                                                     new_width,
+                                                     num_channels],
+                                       strides=[1, upsample, upsample, 1],
+                                       padding='SAME')
+
+        dx_dy = tf.nn.conv2d_transpose(displacements, self.dxdy_kernel,
+                                       output_shape=[batch_size,
+                                                     new_height,
+                                                     new_width,
+                                                     num_channels],
+                                       strides=[1, upsample, upsample, 1],
+                                       padding='SAME')
 
         self.bending_penalty = self.__bendingPenalty(dx_dx, dy_dy, dx_dy)
-
         return res
 
     def __bendingPenalty(self, dx_dx, dy_dy, dx_dy):
