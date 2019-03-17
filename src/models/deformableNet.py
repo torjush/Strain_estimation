@@ -275,19 +275,19 @@ class DeformableNet(tf.keras.Model):
 
     def __doubleDiffBVectors(self, u):
         u = tf.expand_dims(u, -1)
-        B_vecs = tf.concat([-6 * u + 6,
-                            18 * u - 12,
-                            -18 * u + 6,
-                            6 * u],
+        B_vecs = tf.concat([6 * u,
+                            2 * tf.ones_like(u),
+                            tf.zeros_like(u),
+                            tf.zeros_like(u)],
                            axis=-1)
         return B_vecs
 
     def __diffBVectors(self, u):
         u = tf.expand_dims(u, -1)
-        B_vecs = tf.concat([-3 * tf.square(u) + 6 * u - 3,
-                            9 * tf.square(u) - 12 * u,
-                            -9 * tf.square(u) + 6 * u + 3,
-                            3*tf.square(u)],
+        B_vecs = tf.concat([3 * tf.square(u),
+                            2 * u,
+                            tf.ones_like(u),
+                            tf.zeros_like(u)],
                            axis=-1)
         return B_vecs
 
