@@ -1,52 +1,52 @@
 import h5py
-import os
 import numpy as np
 import matplotlib.pyplot as plt
-import tensorflow as tf
 
 
-class DataLoader():
-    """Takes care of getting images from h5files"""
-    def __init__(self, data_path, shuffle=True):
-        self.data_path = data_path
-        self._findFiles()
-        self.index_list = np.arange(0, len(self.h5files), dtype=int)
+class DataSet():
+    def __init__(self, data_path):
+        self.__dataset = h5py.File(data_path, 'r')
+        self.fixed = self.__dataset['fixed']
+        self.moving = self.__dataset['moving']
+
+        self.num_samples = self.fixed.shape[0]
+
+    # def __del__(self):
+    #     self.__dataset.close()
+
+    def batchGenerator(self, batch_size, shuffle=True):
+        idc = list(range(self.num_samples))
         if shuffle:
-            np.random.shuffle(self.index_list)
-        self.current_index = 0
+            np.random.shuffle(idc)
 
-    def _findFiles(self):
-        h5files = [os.path.join(root, name)
-                   for root, dirs, files in os.walk(self.data_path)
-                   for name in files
-                   if name.endswith(('.h5'))]
-        if len(h5files) == 0:
-            raise RuntimeError(f'Didn\'t find any h5files in directory: ' +
-                               '{self.data_path}')
-        self.h5files = h5files
+        for i in range(self.num_samples // batch_size):
+            from_idx = i * batch_size
+            to_idx = from_idx + batch_size
+            sample_idc = sorted(idc[from_idx:to_idx])
+            yield (self.fixed[sample_idc, :, :, :],
+                   self.moving[sample_idc, :, :, :])
 
-    def loadSample(self):
-        idx = self.index_list[self.current_index]
-        with h5py.File(self.h5files[idx], 'r') as data:
-            fixed = tf.constant(data['tissue/data'][:][:-1, :, :, None],
-                                dtype='float32')
-            moving = tf.constant(data['tissue/data'][:][1:, :, :, None],
-                                 dtype='float32')
-
-        # Comment out for overfitting experiment
-        # if self.current_index == len(self.h5files) - 1:
-        #     self.current_index = 0
-        # else:
-        #     self.current_index += 1
-        return fixed, moving
+        # Take care of last run
+        if self.num_samples % batch_size:
+            sample_idc = sorted(idc[(i + 1) * batch_size:])
+            yield (self.fixed[sample_idc, :, :, :],
+                   self.moving[sample_idc, :, :, :])
 
 
 if __name__ == '__main__':
-    loader = DataLoader('../../data/processed/strain_point')
-    fixed, moving = loader.loadSample()
+    loader = DataSet('../../data/processed/strain_est_low_fps/train.h5')
+    batch_gen = loader.batch_generator(16)
 
-    fig, ax = plt.subplots(ncols=2, sharex=True, sharey=True, figsize=(10, 5))
-    ax[0].imshow(fixed[0, :, :, 0], cmap='Greys_r')
-    ax[1].imshow(moving[0, :, :, 0], cmap='Greys_r')
-    plt.tight_layout()
-    plt.show()
+    for fixed, moving in batch_gen:
+        fig, ax = plt.subplots(nrows=2, ncols=2, figsize=(12, 12))
+        ax[0][0].imshow(fixed[4, :, :, 0], cmap='Greys_r')
+        ax[0][0].set_title('Fixed 4')
+        ax[0][1].imshow(moving[4, :, :, 0], cmap='Greys_r')
+        ax[0][1].set_title('Moving 4')
+        ax[1][0].imshow(fixed[-1, :, :, 0], cmap='Greys_r')
+        ax[1][0].set_title('Fixed -1')
+        ax[1][1].imshow(moving[-1, :, :, 0], cmap='Greys_r')
+        ax[1][1].set_title('Moving -1')
+
+        plt.tight_layout()
+        plt.show()
