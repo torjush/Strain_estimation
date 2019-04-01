@@ -33,37 +33,12 @@ class DeformableNet(tf.keras.Model):
             [batch_size, 2, -1])
 
         warped_grid = tf.add(flat_displacements, flat_grid)
+        self.warped_grid = tf.reshape(warped_grid, [-1, 2, height, width])
 
         warped = self.sampleBilinear(moving, warped_grid,
                                      height, width, batch_size)
 
-        return warped, tf.reshape(warped_grid, [-1, 2, height, width])
-
-    def trackPoints(self, fixed, moving, points):
-        num_frames = fixed.shape[0] + 1
-        tracked_points = np.zeros((num_frames, points.shape[0], 2))
-
-        warped, warped_grid = self.call(fixed, moving)
-        for j in range(points.shape[0]):
-            x_coord = np.round(points[j, 0]).astype(int)
-            y_coord = np.round(points[j, 1]).astype(int)
-
-            tracked_points[0, j, 0] = x_coord
-            tracked_points[0, j, 1] = y_coord
-            for frame_num in range(num_frames - 1):
-                # Find points in next frame
-                next_x_coord = warped_grid[frame_num, 0, y_coord, x_coord]
-                next_y_coord = warped_grid[frame_num, 1, y_coord, x_coord]
-                next_x_coord = np.round(next_x_coord).astype(int)
-                next_y_coord = np.round(next_y_coord).astype(int)
-
-                # Update current points
-                x_coord = next_x_coord
-                y_coord = next_y_coord
-                tracked_points[frame_num + 1, j, 0] = x_coord
-                tracked_points[frame_num + 1, j, 1] = y_coord
-
-        return tracked_points
+        return warped
 
     def __makeMeshgrids(self, nx, ny, width, height):
         x_num_between = tf.floor_div(width, nx) - 1
@@ -172,6 +147,7 @@ class DeformableNet(tf.keras.Model):
                            tf.expand_dims(u_kernel, 0))
         self.b_spline_kernel = expandKernels(kernel, 2)
 
+        # TODO: Lag et filter for bp
         # Differentials for bending penalty
         dxdx_B_u = tf.einsum('jk, kl->jl',
                              self.__doubleDiffBVectors(u), coeff_matrix)
