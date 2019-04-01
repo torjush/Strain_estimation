@@ -8,7 +8,7 @@ import os
 PROJ_ROOT = os.path.abspath(os.path.join(os.pardir, os.pardir))
 print(PROJ_ROOT)
 
-data_path = os.path.join(PROJ_ROOT, 'data/processed/ds_ma_labeled/')
+data_path = os.path.join(PROJ_ROOT, 'data/interim/ds_labeled/')
 file_paths = glob.glob(os.path.join(data_path, '*/*.h5'))
 
 for file_path in tqdm.tqdm(file_paths):
@@ -58,42 +58,14 @@ for file_path in tqdm.tqdm(file_paths):
         new_file.create_dataset(
             'tissue/ds_labels',
             data=h5file['tissue/ds_labels'][tissue_start:tissue_end])
-        new_file.create_dataset(
-            'tissue/ma_points',
-            data=h5file['tissue/ma_points'][tissue_start:tissue_end, :, :])
+        # new_file.create_dataset(
+        #     'tissue/ma_points',
+        #     data=h5file['tissue/ma_points'][tissue_start:tissue_end, :, :])
         new_file.create_dataset(
             'tissue/origin',
             data=h5file['tissue/origin'])
         new_file.create_dataset(
             'tissue/pixelsize', data=h5file['tissue/pixelsize'])
-
-        try:
-            tvi_start = np.argmin(
-                np.abs(
-                    h5file['TVI/times'] - h5file['tissue/times'][ed_idc[i]]))
-
-            tvi_end = np.argmin(
-                np.abs(
-                    h5file['TVI/times'] - h5file['tissue/times'][ed_idc[i + 1]])) + 1
-            TVI = np.transpose(h5file['TVI/data'], [2, 1, 0])
-            new_file.create_dataset(
-                'TVI/data', data=TVI[tvi_start:tvi_end, :, :])
-            new_file.create_dataset(
-                'TVI/times', data=h5file['TVI/times'][tvi_start:tvi_end])
-            # Directions inverted because of transpose
-            new_file.create_dataset(
-                'TVI/dirx', data=h5file['TVI/diry'])
-            new_file.create_dataset(
-                'TVI/diry', data=h5file['TVI/dirx'])
-            new_file.create_dataset(
-                'TVI/origin', data=h5file['TVI/origin'])
-            new_file.create_dataset(
-                'TVI/pixelsize', data=h5file['TVI/pixelsize'])
-
-        except KeyError as e:
-            print(e)
-            print('One video is missing TVI times,' +
-                  ' skipping TVI for that sample')
 
         new_file.close()
     h5file.close()

@@ -40,14 +40,14 @@ for h5file in h5files:
             search_box_left = np.array(
                 [[mitral_points[0, 0] - cm2Pixel(3, data, 0),
                   mitral_points[0, 0] + cm2Pixel(0, data, 0)],
-                 [mitral_points[0, 1] + cm2Pixel(2., data, 1),
+                 [mitral_points[0, 1] + cm2Pixel(2.3, data, 1),
                   mitral_points[0, 1] + cm2Pixel(4., data, 1)]]).astype('int')
 
         if right_point_valid:
             search_box_right = np.array(
                 [[mitral_points[1, 0] - cm2Pixel(0, data, 0),
                   mitral_points[1, 0] + cm2Pixel(3, data, 0)],
-                 [mitral_points[1, 1] + cm2Pixel(1.9, data, 1),
+                 [mitral_points[1, 1] + cm2Pixel(2.1, data, 1),
                   mitral_points[1, 1] + cm2Pixel(3.5, data, 1)]]).astype('int')
         print(h5file.split('/')[-2:])
 
