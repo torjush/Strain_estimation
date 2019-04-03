@@ -111,7 +111,7 @@ class DeformableNet(tf.keras.Model):
         return warped
 
     def __bSplineKernels(self):
-        upsample = self.num_stages * 2
+        upsample = 2 ** self.num_stages
         step = 1 / upsample
         u = tf.linspace(0., (upsample - 1) * step, upsample)
         v = tf.linspace(0., (upsample - 1) * step, upsample)
@@ -147,7 +147,7 @@ class DeformableNet(tf.keras.Model):
                            tf.expand_dims(u_kernel, 0))
         self.b_spline_kernel = expandKernels(kernel, 2)
 
-        # TODO: Lag et filter for bp
+        # TODO: Lag ett filter for bp
         # Differentials for bending penalty
         dxdx_B_u = tf.einsum('jk, kl->jl',
                              self.__doubleDiffBVectors(u), coeff_matrix)
@@ -177,7 +177,7 @@ class DeformableNet(tf.keras.Model):
         num_channels = displacements.shape[3]
         batch_size = displacements.shape[0]
 
-        upsample = self.num_stages * 2
+        upsample = 2 ** self.num_stages
 
         # Deal with odd dimensions
         if new_height % displacements.numpy().shape[1]:
