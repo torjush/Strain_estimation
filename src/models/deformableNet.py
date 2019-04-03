@@ -180,11 +180,11 @@ class DeformableNet(tf.keras.Model):
         upsample = self.num_stages * 2
 
         # Deal with odd dimensions
-        if new_height % 2 == 1:
+        if new_height % displacements.numpy().shape[1]:
             y_pad = 1
         else:
             y_pad = 0
-        if new_width % 2 == 1:
+        if new_width % displacements.numpy().shape[2]:
             x_pad = 1
         else:
             x_pad = 0
