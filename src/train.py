@@ -116,7 +116,7 @@ for i, defnet in enumerate(defnets):
                     warped = defnet(fixed, moving)
                     warped_grid = defnet.warped_grid
 
-                    cross_corr = unmaskedNcc2d(fixed, warped)
+                    cross_corr = unmaskedNncc2d(fixed, warped)
                     bending_pen = defnet.bending_penalty
                     loss = cross_corr + args.penalty * bending_pen
             grads = tape.gradient(loss, defnet.trainable_variables)
@@ -160,7 +160,7 @@ for i, defnet in enumerate(defnets):
         cross_corrs = []
         for fixed, moving in batch_gen:
             warped = defnet(fixed, moving)
-            cross_corr = nncc2d(fixed, warped)
+            cross_corr = unmaskedNncc2d(fixed, warped)
             cross_corrs.append(cross_corr)
         mean_cross_corr = np.mean(cross_corrs)
         print(f'{{"metric": "Mean Validation NCC",' +

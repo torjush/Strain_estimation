@@ -7,6 +7,8 @@ import argparse
 import os
 import h5py
 import glob
+import pandas as pd
+import random
 
 tf.enable_eager_execution()
 
@@ -39,7 +41,7 @@ def trackPoints(defnets, fixed, moving, points, smoothing=0.):
                               fixed.shape[1],
                               fixed.shape[2], 2))
     for i, defnet in enumerate(defnets):
-        warped = defnet(fixed, moving)
+        moving = defnet(fixed, moving)
         displacements += defnet.interpolated_displacements.numpy()
     yy, xx = np.mgrid[:fixed.numpy().shape[1],
                       :fixed.numpy().shape[2]]
@@ -102,20 +104,33 @@ for i, defnet in enumerate(defnets):
     except (tf.errors.InvalidArgumentError, tf.errors.NotFoundError):
         print('No previous weights found or weights couldn\'t be loaded')
         exit(-1)
-h5file = args.data_path
 
+# Nonlinear mapping for contrast enhancement
 pal_txt = open('../../pal.txt')
 line = pal_txt.readline()[:-1]
 pal = np.array([float(val) for val in line.split(',')])
+left_strains, right_strains = [], []
 
-with h5py.File(h5file) as data:
-    video = data['tissue/data'][:]
-    video = np.array([[[pal[int(round(video[i, j, k]))]
-                        for k in range(video.shape[2])]
-                       for j in range(video.shape[1])]
-                      for i in range(video.shape[0])])
-    video /= 255.
-    fps = 1 / (data['tissue/times'][3] - data['tissue/times'][2])
+view_and_vals = pd.read_csv(
+    '../data/raw/Ultrasound_high_fps/strain_and_view_gt.csv',
+    delimiter=';')
+
+h5files = random.sample(glob.glob(os.path.join(args.data_path, 'p*/*.h5')), 15)
+for h5file in h5files:
+    with h5py.File(h5file) as data:
+        file_name = h5file.split('/')[-1][:-5]
+        file_num = int(h5file.split('_')[-1][:-3])
+
+        video = data['tissue/data'][:]
+        video = np.array([[[pal[int(round(video[i, j, k]))]
+                            for k in range(video.shape[2])]
+                           for j in range(video.shape[1])]
+                          for i in range(video.shape[0])])
+        video /= 255.
+        fps = 1 / (data['tissue/times'][3] - data['tissue/times'][2])
+
+        ds_labels = data['tissue/ds_labels']
+        es = np.argwhere(ds_labels[:] == 2.)[0][0]
 
     fixed = tf.constant(video[:-1, :, :, None],
                         dtype='float32')
@@ -134,19 +149,55 @@ with h5py.File(h5file) as data:
     ax.imshow(fixed[0, :, :, 0], cmap='Greys_r')
     fig.canvas.mpl_connect('button_press_event', clicks)
     plt.show()
-    plt.close()
+    plt.close('all')
 
     points = np.array(points)
     tracked_points = trackPoints(defnets, fixed, moving, points, smoothing=0.)
 
     anim = ultraSoundAnimation(video,
                                points=tracked_points, fps=fps)
-    anim.save(os.path.join(args.output_path, 'ma_point_track_test.mp4'))
+    anim.save(os.path.join(args.output_path,
+                           'videos', file_name + f'_{file_num}' + '.mp4'))
+    plt.close('all')
 
     left_dist, right_dist = distances(tracked_points)
-    fig, ax = plt.subplots()
-    ax.plot(left_dist)
-    ax.plot(right_dist)
+    # fig, ax = plt.subplots()
+    # ax.plot(left_dist)
+    # ax.plot(right_dist)
 
-    ax.legend(['Left distances', 'Right distances'])
-    plt.show()
+    # ax.legend(['Left distances', 'Right distances'])
+    # plt.show()
+
+    file_info = view_and_vals[view_and_vals['File'] == file_name]
+    ground_truth_left = file_info['Left strain'].values[0]
+    left_ed_dist = left_dist[0]
+    left_es_dist = left_dist[es]
+
+    left_strain = 100 * (left_ed_dist - left_es_dist) / left_es_dist
+
+    ground_truth_right = file_info['Right strain'].values[0]
+    right_ed_dist = right_dist[0]
+    right_es_dist = right_dist[es]
+
+    right_strain = 100 * (right_ed_dist - right_es_dist) / right_es_dist
+    print(f'Left strain: {left_strain}, Right strain: {right_strain}')
+    if not np.isnan(ground_truth_left):
+        left_strains.append([ground_truth_left, left_strain])
+    if not np.isnan(ground_truth_right):
+        right_strains.append([ground_truth_right, right_strain])
+
+left_strains = np.array(left_strains)
+right_strains = np.array(right_strains)
+
+np.savetxt(os.path.join(args.output_path, 'left.txt'), left_strains)
+np.savetxt(os.path.join(args.output_path, 'right.txt'), right_strains)
+
+fig, ax = plt.subplots(ncols=2)
+if left_strains.any():
+    ax[0].scatter(left_strains[:, 0], left_strains[:, 1])
+    ax[0].set_title('Left gt vs left strain estimate')
+if right_strains.any():
+    ax[1].scatter(right_strains[:, 0], right_strains[:, 1])
+    ax[1].set_title('Right gt vs right strain estimate')
+
+plt.show()
