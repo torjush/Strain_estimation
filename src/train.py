@@ -58,8 +58,7 @@ if not os.path.exists(logdir):
 
 def gridPlotTobuffer(warped_grid):
     fig, ax = plt.subplots()
-    plotGrid(ax, warped_grid, color='purple')
-    plt.gca().invert_yaxis()
+    plotGrid(ax, warped_grid[7, :, :, :], color='purple')
     ax.set_title('Warp Grid')
 
     buf = io.BytesIO()
@@ -100,10 +99,17 @@ for i, defnet in enumerate(defnets):
     for _ in range(args.num_epochs):
         batch_gen = train_loader.batchGenerator(args.batch_size)
         for fixed, moving in batch_gen:
+            xx, yy = tf.meshgrid(
+                tf.range(0., fixed.shape[2]),
+                tf.range(0., fixed.shape[1]))
+            warped_grid = tf.stack([xx, yy])
             if i == 0:
                 with tf.GradientTape() as tape:
                     warped = defnet(fixed, moving)
-                    warped_grid = defnet.warped_grid
+                    warped_grid = tf.add(
+                        warped_grid,
+                        tf.transpose(defnet.interpolated_displacements,
+                                     [0, 3, 1, 2]))
                     cross_corr = unmaskedNncc2d(fixed, warped)
                     bending_pen = defnet.bending_penalty
                     loss = cross_corr + args.penalty * bending_pen
@@ -111,10 +117,16 @@ for i, defnet in enumerate(defnets):
                 # Run through preceeding stages
                 for j in range(i):
                     moving = defnets[j](fixed, moving)
-
+                    warped_grid = tf.add(
+                        warped_grid,
+                        tf.transpose(defnets[j].interpolated_displacements,
+                                     [0, 3, 1, 2]))
                 with tf.GradientTape() as tape:
                     warped = defnet(fixed, moving)
-                    warped_grid = defnet.warped_grid
+                    warped_grid = tf.add(
+                        warped_grid,
+                        tf.transpose(defnet.interpolated_displacements,
+                                     [0, 3, 1, 2]))
 
                     cross_corr = unmaskedNncc2d(fixed, warped)
                     bending_pen = defnet.bending_penalty
@@ -152,17 +164,19 @@ for i, defnet in enumerate(defnets):
             optimizer.apply_gradients(zip(grads, defnet.trainable_variables),
                                       global_step=global_step)
 
-            defnet.save_weights(modeldir)
-            np.savetxt(os.path.join(savedir, 'global_step.txt'),
-                       [global_step.numpy()])
+            if global_step.numpy() % 100 == 0:
+                defnet.save_weights(modeldir)
+                np.savetxt(os.path.join(savedir, 'global_step.txt'),
+                           [global_step.numpy()])
 
-        batch_gen = val_loader.batchGenerator(args.batch_size, shuffle=False)
-        cross_corrs = []
-        for fixed, moving in batch_gen:
-            warped = defnet(fixed, moving)
-            cross_corr = unmaskedNncc2d(fixed, warped)
-            cross_corrs.append(cross_corr)
-        mean_cross_corr = np.mean(cross_corrs)
-        print(f'{{"metric": "Mean Validation NCC",' +
-              f' "value": {mean_cross_corr}, ' +
-              f'"step": {global_step.numpy()}}}')
+                batch_gen = val_loader.batchGenerator(args.batch_size,
+                                                      shuffle=False)
+                cross_corrs = []
+                for val_fixed, val_moving in batch_gen:
+                    val_warped = defnet(val_fixed, val_moving)
+                    cross_corr = unmaskedNncc2d(val_fixed, val_warped)
+                    cross_corrs.append(cross_corr)
+                mean_cross_corr = np.mean(cross_corrs)
+                print(f'{{"metric": "Mean Validation NCC",' +
+                      f' "value": {mean_cross_corr}, ' +
+                      f'"step": {global_step.numpy()}}}')
