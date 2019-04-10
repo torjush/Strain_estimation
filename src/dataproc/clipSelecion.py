@@ -90,10 +90,9 @@ for data_file in data_files:
     with h5py.File(data_file) as data:
         video = data['tissue/data'][:]
         fps = 1 / (data['tissue/times'][3] - data['tissue/times'][2])
-        points = data['tissue/ma_points'][:]
 
     press = partial(pressOnFile, data_file=data_file)
-    fig, anim = ultraSoundAnimation(video, points=points, fps=fps)
+    fig, anim = ultraSoundAnimation(video, fps=fps)
     fig.canvas.mpl_connect('key_press_event', press)
     plt.show()
 
