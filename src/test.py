@@ -1,6 +1,5 @@
 import tensorflow as tf
 import numpy as np
-import matplotlib.pyplot as plt
 from models.deformableNet import DeformableNet
 from misc.notebookHelpers import ultraSoundAnimation
 import argparse
@@ -8,7 +7,6 @@ import os
 import h5py
 import glob
 import pandas as pd
-from misc.plots import plotGrid
 
 tf.enable_eager_execution()
 
@@ -138,66 +136,28 @@ for h5file in h5files:
     moving = tf.constant(video[1:, :, :, None],
                          dtype='float32')
 
-    # points = []
-
-    # def clicks(event):
-    #     point = event.xdata, event.ydata
-    #     points.append(point)
-    #     plt.gca().scatter(event.xdata, event.ydata, color='red')
-    #     plt.gcf().canvas.draw()
-
-    # fig, ax = plt.subplots()
-    # ax.imshow(fixed[0, :, :, 0], cmap='Greys_r')
-    # fig.canvas.mpl_connect('button_press_event', clicks)
-    # plt.show()
-    # plt.close('all')
-
-    # points = np.array(points)
     tracked_points, displacements = trackPoints(defnets, fixed, moving,
                                                 points, smoothing=0.)
-    # total_displacements = np.sum(displacements[:es + 1, :, :, :], axis=0)
-    # yy, xx = np.mgrid[:fixed.numpy().shape[1],
-    #                   :fixed.numpy().shape[2]]
-
-    # grid = np.vstack((xx[None, :, :], yy[None, :, :]))
-
-    # warped_grid = grid + np.transpose(total_displacements, [2, 0, 1])
-    # fig, ax = plt.subplots(ncols=3, figsize=(15, 5))
-    # ax[0].imshow(video[0, :, :], cmap='Greys_r')
-    # ax[0].set_title('ED')
-    # ax[1].imshow(video[es, :, :], cmap='Greys_r')
-    # ax[1].set_title('ES')
-    # ax[2].imshow(video[es, :, :], cmap='Greys_r')
-    # ax[2].set_title('ES with deformed grid')
-    # plotGrid(ax[2], warped_grid, color='purple')
-    # plt.show()
 
     anim = ultraSoundAnimation(video,
                                points=tracked_points, fps=fps)
     anim.save(os.path.join(args.output_path,
                            'videos', file_name + f'_{file_num}' + '.mp4'))
-    # plt.close('all')
 
     left_dist, right_dist = distances(tracked_points)
-    # fig, ax = plt.subplots()
-    # ax.plot(left_dist)
-    # ax.plot(right_dist)
-
-    # ax.legend(['Left distances', 'Right distances'])
-    # plt.show()
 
     file_info = view_and_vals[view_and_vals['File'] == file_name]
     ground_truth_left = file_info['Left strain'].values[0]
     left_ed_dist = left_dist[0]
     left_es_dist = left_dist[es]
 
-    left_strain = 100 * (left_ed_dist - left_es_dist) / left_es_dist
+    left_strain = 100 * np.abs((left_es_dist - left_ed_dist) / left_ed_dist)
 
     ground_truth_right = file_info['Right strain'].values[0]
     right_ed_dist = right_dist[0]
     right_es_dist = right_dist[es]
 
-    right_strain = 100 * (right_ed_dist - right_es_dist) / right_es_dist
+    right_strain = 100 * np.abs((right_es_dist - right_ed_dist) / right_ed_dist)
     print(f'Left strain: {left_strain}, Right strain: {right_strain}')
     if not np.isnan(ground_truth_left):
         left_strains.append([ground_truth_left, left_strain])
@@ -209,13 +169,3 @@ right_strains = np.array(right_strains)
 
 np.savetxt(os.path.join(args.output_path, 'left.txt'), left_strains)
 np.savetxt(os.path.join(args.output_path, 'right.txt'), right_strains)
-
-fig, ax = plt.subplots(ncols=2)
-if left_strains.any():
-    ax[0].scatter(left_strains[:, 0], left_strains[:, 1])
-    ax[0].set_title('Left gt vs left strain estimate')
-if right_strains.any():
-    ax[1].scatter(right_strains[:, 0], right_strains[:, 1])
-    ax[1].set_title('Right gt vs right strain estimate')
-
-plt.show()
