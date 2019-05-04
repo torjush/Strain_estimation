@@ -9,7 +9,7 @@ def plotGrid(ax, warped_grid, **kwargs):
 
 
 def plotVectorField(ax, vector_field, **kwargs):
-    U = vector_field.numpy()[7, :, :, 0]
-    V = vector_field.numpy()[7, :, :, 1]
+    U = vector_field[:, :, 0]
+    V = vector_field[:, :, 1]
 
     ax.quiver(U, V, **kwargs)
