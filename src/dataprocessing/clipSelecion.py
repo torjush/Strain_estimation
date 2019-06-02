@@ -1,4 +1,5 @@
 import h5py
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import animation
 import os
@@ -42,7 +43,7 @@ def ultraSoundAnimation(video, points=None, fps=24, with_colorbar=False):
 
 
 PROJ_ROOT = '../../'
-data_path = os.path.join(PROJ_ROOT, 'data/interim/ed_2_ed_clips')
+data_path = os.path.join(PROJ_ROOT, 'data/raw/DL2019_2_Bmode')
 
 data_files = glob.glob(os.path.join(data_path, '*/*.h5'))
 sorted_path = os.path.join(PROJ_ROOT, 'data/interim/sorted_clips')
@@ -88,7 +89,7 @@ def pressOnFile(event, data_file):
 for data_file in data_files:
     print(f'Loading file: {data_file}')
     with h5py.File(data_file) as data:
-        video = data['tissue/data'][:]
+        video = np.transpose(data['tissue/data'], [2, 1, 0])
         fps = 1 / (data['tissue/times'][3] - data['tissue/times'][2])
 
     press = partial(pressOnFile, data_file=data_file)

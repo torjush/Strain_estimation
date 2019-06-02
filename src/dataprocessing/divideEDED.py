@@ -8,14 +8,14 @@ import os
 PROJ_ROOT = os.path.abspath(os.path.join(os.pardir, os.pardir))
 print(PROJ_ROOT)
 
-data_path = os.path.join(PROJ_ROOT, 'data/interim/ds_labeled/')
+data_path = os.path.join(PROJ_ROOT, 'data/interim/old/ds_labeled/')
 file_paths = glob.glob(os.path.join(data_path, '*/*.h5'))
 
 for file_path in tqdm.tqdm(file_paths):
     h5file = h5py.File(file_path)
 
     new_file_directory = os.path.join(PROJ_ROOT,
-                                      'data/interim/ed_2_ed_clips',
+                                      'data/interim/old/ed_2_ed_clips',
                                       file_path.split('/')[-2])
 
     if not os.path.exists(new_file_directory):

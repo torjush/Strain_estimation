@@ -1,5 +1,4 @@
 import tensorflow as tf
-import numpy as np
 
 
 class DeformableNet(tf.keras.Model):
@@ -147,7 +146,6 @@ class DeformableNet(tf.keras.Model):
                            tf.expand_dims(u_kernel, 0))
         self.b_spline_kernel = expandKernels(kernel, 2)
 
-        # TODO: Lag ett filter for bp
         # Differentials for bending penalty
         dxdx_B_u = tf.einsum('jk, kl->jl',
                              self.__doubleDiffBVectors(u), coeff_matrix)
@@ -178,18 +176,6 @@ class DeformableNet(tf.keras.Model):
         batch_size = displacements.shape[0]
 
         upsample = 2 ** self.num_stages
-
-        # Deal with odd dimensions
-        if new_height % displacements.numpy().shape[1]:
-            y_pad = 1
-        else:
-            y_pad = 0
-        if new_width % displacements.numpy().shape[2]:
-            x_pad = 1
-        else:
-            x_pad = 0
-        displacements = tf.pad(displacements,
-                               [[0, 0], [0, y_pad], [0, x_pad], [0, 0]])
 
         # Interpolate vector field
         res = tf.nn.conv2d_transpose(displacements, self.b_spline_kernel,
@@ -226,6 +212,7 @@ class DeformableNet(tf.keras.Model):
                                        padding='SAME')
 
         self.bending_penalty = self.__bendingPenalty(dx_dx, dy_dy, dx_dy)
+        # bending_pen_img = tf.nn.conv2d()
         return res
 
     def __bendingPenalty(self, dx_dx, dy_dy, dx_dy):
@@ -280,7 +267,8 @@ class DeformableNet(tf.keras.Model):
             setattr(self, f'activation_{i}',
                     tf.keras.layers.LeakyReLU(alpha=self.alpha))
             setattr(self, f'avgpool_{i}',
-                    tf.keras.layers.AveragePooling2D(pool_size=[2, 2]))
+                    tf.keras.layers.AveragePooling2D(pool_size=[2, 2],
+                                                     padding='SAME'))
 
         # Final convolutions
         self.finalconv_0 = tf.keras.layers.Conv2D(

@@ -1,13 +1,14 @@
 import tensorflow as tf
 import numpy as np
 from models.deformableNet import DeformableNet
-from models.losses import nncc2d, unmaskedNncc2d
+from models.losses import maskedNNCC2d, unmaskedNNCC2d
 from data.dataLoader import DataSet
 import matplotlib.pyplot as plt
 from misc.plots import plotGrid
 import argparse
 import os
 import io
+import time
 
 tf.enable_eager_execution()
 parser = argparse.ArgumentParser()
@@ -29,9 +30,10 @@ parser.add_argument('-bp', '--penalty',
 parser.add_argument('-l', '--leakage',
                     type=float, default=0.2,
                     help='Leakage parameter in leaky relu units')
-parser.add_argument('-ns', '--num-stages',
-                    type=int, default=1,
-                    help='Number of chained models')
+parser.add_argument('-ds', '--downsampling-layers',
+                    type=str, default='2',
+                    help='Comma delimited(no spaces) list containing ' +\
+                    'the number of downsampling layers for each network')
 parser.add_argument('-op', '--output-path',
                     default='../output',
                     help='Path to storing output, ' +
@@ -58,7 +60,7 @@ if not os.path.exists(logdir):
 
 def gridPlotTobuffer(warped_grid):
     fig, ax = plt.subplots()
-    plotGrid(ax, warped_grid[7, :, :, :], color='purple')
+    plotGrid(ax, warped_grid[0, :, :, :], color='purple')
     ax.set_title('Warp Grid')
 
     buf = io.BytesIO()
@@ -69,8 +71,8 @@ def gridPlotTobuffer(warped_grid):
     return buf
 
 
-defnets = [DeformableNet(i, args.leakage)
-           for i in range(args.num_stages, 0, -1)]
+ds_layers = [int(num) for num in args.downsampling_layers.split(',')]
+defnets = [DeformableNet(num, args.leakage) for num in ds_layers]
 
 train_writer = tf.contrib.summary.create_file_writer(logdir)
 train_writer.set_as_default()
@@ -98,7 +100,11 @@ for i, defnet in enumerate(defnets):
         os.makedirs(modeldir)
     for _ in range(args.num_epochs):
         batch_gen = train_loader.batchGenerator(args.batch_size)
+        end = 0
         for fixed, moving in batch_gen:
+            begin = time.time()
+            print(f'{{"metric": "Load time", "value": {(begin - end)}, ' +
+                  f'"step": {global_step.numpy()}}}')
             xx, yy = tf.meshgrid(
                 tf.range(0., fixed.shape[2]),
                 tf.range(0., fixed.shape[1]))
@@ -110,7 +116,8 @@ for i, defnet in enumerate(defnets):
                         warped_grid,
                         tf.transpose(defnet.interpolated_displacements,
                                      [0, 3, 1, 2]))
-                    cross_corr = unmaskedNncc2d(fixed, warped)
+
+                    cross_corr = unmaskedNNCC2d(fixed, warped)
                     bending_pen = defnet.bending_penalty
                     loss = cross_corr + args.penalty * bending_pen
             else:
@@ -128,9 +135,10 @@ for i, defnet in enumerate(defnets):
                         tf.transpose(defnet.interpolated_displacements,
                                      [0, 3, 1, 2]))
 
-                    cross_corr = unmaskedNncc2d(fixed, warped)
+                    cross_corr = unmaskedNNCC2d(fixed, warped)
                     bending_pen = defnet.bending_penalty
                     loss = cross_corr + args.penalty * bending_pen
+
             grads = tape.gradient(loss, defnet.trainable_variables)
 
             print(f'{{"metric": "Loss", "value": {loss}, ' +
@@ -140,21 +148,21 @@ for i, defnet in enumerate(defnets):
             print(f'{{"metric": "Bending_penalty", "value": ' +
                   f'{args.penalty * bending_pen},' +
                   f' "step": {global_step.numpy()}}}')
-            with tf.contrib.summary.record_summaries_every_n_global_steps(1):
-                tf.contrib.summary.scalar('loss', loss)
-                tf.contrib.summary.scalar('NCC loss', cross_corr)
-                tf.contrib.summary.scalar('Bending penalty',
-                                          args.penalty * bending_pen)
-                for var in defnet.trainable_variables:
-                    tf.contrib.summary.histogram(var.name, var)
-                for grad, var in zip(grads, defnet.trainable_variables):
-                    tf.contrib.summary.histogram(var.name + '/gradient', grad)
-            with tf.contrib.summary.record_summaries_every_n_global_steps(10):
-                tf.contrib.summary.image('Fixed', fixed[7:8, :, :, :],
+            # with tf.contrib.summary.record_summaries_every_n_global_steps(1):
+            #     tf.contrib.summary.scalar('loss', loss)
+            #     tf.contrib.summary.scalar('NCC loss', cross_corr)
+            #     tf.contrib.summary.scalar('Bending penalty',
+            #                               args.penalty * bending_pen)
+            #     for var in defnet.trainable_variables:
+            #         tf.contrib.summary.histogram(var.name, var)
+            #     for grad, var in zip(grads, defnet.trainable_variables):
+            #         tf.contrib.summary.histogram(var.name + '/gradient', grad)
+            with tf.contrib.summary.record_summaries_every_n_global_steps(100):
+                tf.contrib.summary.image('Fixed', fixed[0:1, :, :, :],
                                          max_images=1)
-                tf.contrib.summary.image('Moving', moving[7:8, :, :, :],
+                tf.contrib.summary.image('Moving', moving[0:1, :, :, :],
                                          max_images=1)
-                tf.contrib.summary.image('Warped', warped[7:8, :, :, :],
+                tf.contrib.summary.image('Warped', warped[0:1, :, :, :],
                                          max_images=1)
                 buf = gridPlotTobuffer(warped_grid)
                 grid_img = tf.expand_dims(
@@ -164,6 +172,7 @@ for i, defnet in enumerate(defnets):
             optimizer.apply_gradients(zip(grads, defnet.trainable_variables),
                                       global_step=global_step)
 
+            end = time.time()
             if global_step.numpy() % 100 == 0:
                 defnet.save_weights(modeldir)
                 np.savetxt(os.path.join(savedir, 'global_step.txt'),
@@ -174,7 +183,7 @@ for i, defnet in enumerate(defnets):
                 cross_corrs = []
                 for val_fixed, val_moving in batch_gen:
                     val_warped = defnet(val_fixed, val_moving)
-                    cross_corr = unmaskedNncc2d(val_fixed, val_warped)
+                    cross_corr = unmaskedNNCC2d(val_fixed, val_warped)
                     cross_corrs.append(cross_corr)
                 mean_cross_corr = np.mean(cross_corrs)
                 print(f'{{"metric": "Mean Validation NCC",' +

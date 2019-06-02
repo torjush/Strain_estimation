@@ -82,7 +82,8 @@ class Annotator():
             self.data.create_dataset('tissue/track_points', data=p_array)
         except RuntimeError as e:
             if e.__str__() == "Unable to create link (name already exists)":
-                self.data['tissue/track_points'][...] = p_array
+                del self.data['tissue/track_points']
+                self.data['tissue/track_points'] = p_array
             else:
                 raise e
         print("Saved points")
@@ -94,7 +95,7 @@ parser.add_argument('-dp', '--data-path')
 
 args = parser.parse_args()
 
-h5files = glob.glob(os.path.join(args.data_path, '*.h5'))
+h5files = glob.glob(os.path.join(args.data_path, 'I599GE0C_1.h5'))
 for h5file in h5files:
     print(h5file)
     annotator = Annotator(h5file)

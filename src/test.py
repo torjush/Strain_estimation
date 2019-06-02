@@ -7,6 +7,7 @@ import os
 import h5py
 import glob
 import pandas as pd
+import cv2
 
 tf.enable_eager_execution()
 
@@ -17,9 +18,13 @@ parser.add_argument('-id', '--experiment-id',
 parser.add_argument('-l', '--leakage',
                     type=float, default=0.2,
                     help='Leakage parameter in leaky relu units')
-parser.add_argument('-ns', '--num-stages',
-                    type=int, default=1,
-                    help='Number of chained models')
+parser.add_argument('-s', '--smoothing',
+                    type=float, default=0.,
+                    help='Smoothing parameter for exp moving average filter')
+parser.add_argument('-ds', '--downsampling-layers',
+                    type=str, default='2',
+                    help='Comma delimited(no spaces) list containing ' +\
+                    'the number of downsampling layers for each network')
 parser.add_argument('-op', '--output-path',
                     default='../output',
                     help='Path to storing/loading output, ' +
@@ -33,11 +38,12 @@ args = parser.parse_args()
 
 def trackPoints(defnets, fixed, moving, points, smoothing=0.):
     num_frames = fixed.shape[0] + 1
-    tracked_points = np.zeros((num_frames, points.shape[0], 2))
+    tracked_points = np.zeros((num_frames, points.shape[0], 2), int)
 
     displacements = np.zeros((fixed.shape[0],
                               fixed.shape[1],
                               fixed.shape[2], 2))
+
     for i, defnet in enumerate(defnets):
         moving = defnet(fixed, moving)
         displacements += defnet.interpolated_displacements.numpy()
@@ -51,6 +57,7 @@ def trackPoints(defnets, fixed, moving, points, smoothing=0.):
                           axis=1)
 
     warped_grid = grid + np.transpose(displacements, [0, 3, 1, 2])
+    displacements = np.transpose(displacements, [0, 3, 1, 2])
     for j in range(points.shape[0]):
         x_coord = np.round(points[j, 0]).astype(int)
         y_coord = np.round(points[j, 1]).astype(int)
@@ -76,6 +83,41 @@ def trackPoints(defnets, fixed, moving, points, smoothing=0.):
                 (1 - smoothing) * y_coord +\
                 smoothing * tracked_points[frame_num, j, 1]
 
+    #     Tracking with Kalman filter
+    # for j in range(points.shape[0]):
+    #     kalman = cv2.KalmanFilter(4, 2)
+    #     kalman.measurementMatrix = np.eye(4, dtype=np.float32)
+    #     kalman.transitionMatrix = np.array([[1, 0, 1, 0],
+    #                                         [0, 1, 0, 1],
+    #                                         [0, 0, 1, 0],
+    #                                         [0, 0, 0, 1]], np.float32)
+    #     kalman.measurementNoiseCov = np.eye(4, dtype=np.float32) * .005
+    #     kalman.processNoiseCov = np.eye(4, dtype=np.float32) * .005
+
+    #     mp = np.array([[np.round(points[j, 0])],
+    #                    [np.round(points[j, 1])],
+    #                    [0],
+    #                    [-1]]).astype(np.float32)
+    #     kalman.statePre = mp.copy()
+    #     tracked_points[0, j, :] = mp[:2, 0].astype(int)
+
+    #     for frame_num in range(num_frames - 1):
+    #         displacement = displacements[frame_num, :,
+    #                                      tracked_points[frame_num, j, 1],
+    #                                      tracked_points[frame_num, j, 0]]
+    #         position = tracked_points[frame_num, j, :] + displacement
+
+    #         mp = np.array([position[0],
+    #                        position[1],
+    #                        displacement[0],
+    #                        displacement[1]]).astype(np.float32)
+
+    #         kalman.correct(mp)
+    #         tp = np.round(kalman.predict()).astype(int)
+    #         tp[0, 0] = np.clip(tp[0, 0], 0, fixed.shape[2])
+    #         tp[1, 0] = np.clip(tp[1, 0], 0, fixed.shape[1])
+    #         tracked_points[frame_num + 1, j, :] = tp[:2, 0]
+
     return tracked_points, displacements
 
 
@@ -92,8 +134,17 @@ def distances(tracked_points):
 savedir = os.path.join(args.output_path, 'models',
                        args.experiment_id)
 
-defnets = [DeformableNet(i + 1, args.leakage)
-           for i in range(args.num_stages, 0, -1)]
+if not os.path.exists(os.path.join(args.output_path,
+                                   'videos', args.experiment_id)):
+    os.makedirs(os.path.join(args.output_path,
+                             'videos', args.experiment_id))
+if not os.path.exists(os.path.join(args.output_path,
+                                   'results', args.experiment_id)):
+    os.makedirs(os.path.join(args.output_path,
+                             'results', args.experiment_id))
+
+ds_layers = [int(num) for num in args.downsampling_layers.split(',')]
+defnets = [DeformableNet(num, args.leakage) for num in ds_layers]
 
 for i, defnet in enumerate(defnets):
     try:
@@ -107,16 +158,25 @@ for i, defnet in enumerate(defnets):
 pal_txt = open('../../pal.txt')
 line = pal_txt.readline()[:-1]
 pal = np.array([float(val) for val in line.split(',')])
-left_strains, right_strains = [], []
 
-view_and_vals = pd.read_csv(
-    '../data/raw/Ultrasound_high_fps/strain_and_view_gt.csv',
-    delimiter=';')
+# view_and_vals = pd.read_csv(
+#     '../data/raw/Ultrasound_high_fps/strain_and_view_gt.csv',
+#     delimiter=';')
 
-h5files = glob.glob(os.path.join(args.data_path, 'p*/*.h5'))
+views = pd.read_csv('../data/raw/views.csv')
+views = dict(zip(views.file, views.view))
+# views = dict(zip(view_and_vals.File, view_and_vals.View))
+
+h5files = glob.glob(os.path.join(args.data_path, '*/*.h5'))
+left_strains = {}
+right_strains = {}
+
 for h5file in h5files:
     with h5py.File(h5file) as data:
         file_name = h5file.split('/')[-1][:-5]
+        patient = h5file.split('/')[-2]
+        key = patient + '/' + file_name
+
         file_num = int(h5file.split('_')[-1][:-3])
 
         video = data['tissue/data'][:]
@@ -128,7 +188,7 @@ for h5file in h5files:
         fps = 1 / (data['tissue/times'][3] - data['tissue/times'][2])
 
         ds_labels = data['tissue/ds_labels']
-        points = data['tissue/track_points'][:]
+        points = data['tissue/det_track_points'][:]
         es = np.argwhere(ds_labels[:] == 2.)[0][0]
 
     fixed = tf.constant(video[:-1, :, :, None],
@@ -136,36 +196,61 @@ for h5file in h5files:
     moving = tf.constant(video[1:, :, :, None],
                          dtype='float32')
 
-    tracked_points, displacements = trackPoints(defnets, fixed, moving,
-                                                points, smoothing=0.)
+    tracked_points, displacements = trackPoints(defnets,
+                                                fixed, moving,
+                                                points,
+                                                smoothing=args.smoothing)
 
-    anim = ultraSoundAnimation(video,
-                               points=tracked_points, fps=fps)
-    anim.save(os.path.join(args.output_path,
-                           'videos', file_name + f'_{file_num}' + '.mp4'))
+    # anim = ultraSoundAnimation(video,
+    #                            points=tracked_points, fps=fps)
+    # anim.save(os.path.join(args.output_path,
+    #                        'videos', args.experiment_id,
+    #                        file_name + f'_{file_num}' + '.mp4'))
 
     left_dist, right_dist = distances(tracked_points)
 
-    file_info = view_and_vals[view_and_vals['File'] == file_name]
-    ground_truth_left = file_info['Left strain'].values[0]
     left_ed_dist = left_dist[0]
     left_es_dist = left_dist[es]
 
-    left_strain = 100 * np.abs((left_es_dist - left_ed_dist) / left_ed_dist)
+    if (video[0, points[0, 1], points[0, 0]] == 0. or
+            video[0, points[2, 1], points[2, 0]] == 0.):
+        left_strain = np.nan
+    else:
+        left_strain = 100 * np.abs((left_es_dist - left_ed_dist) /
+                                   left_ed_dist)
 
-    ground_truth_right = file_info['Right strain'].values[0]
     right_ed_dist = right_dist[0]
     right_es_dist = right_dist[es]
 
-    right_strain = 100 * np.abs((right_es_dist - right_ed_dist) / right_ed_dist)
+    if (video[0, points[1, 1], points[1, 0]] == 0. or
+            video[0, points[3, 1], points[3, 0]] == 0.):
+        right_strain = np.nan
+    else:
+        right_strain = 100 * np.abs((right_es_dist - right_ed_dist) /
+                                    right_ed_dist)
     print(f'Left strain: {left_strain}, Right strain: {right_strain}')
-    if not np.isnan(ground_truth_left):
-        left_strains.append([ground_truth_left, left_strain])
-    if not np.isnan(ground_truth_right):
-        right_strains.append([ground_truth_right, right_strain])
 
-left_strains = np.array(left_strains)
-right_strains = np.array(right_strains)
+    if key in left_strains:
+        left_strains[key].append(left_strain)
+    else:
+        left_strains[key] = [left_strain]
 
-np.savetxt(os.path.join(args.output_path, 'left.txt'), left_strains)
-np.savetxt(os.path.join(args.output_path, 'right.txt'), right_strains)
+    if key in right_strains:
+        right_strains[key].append(right_strain)
+    else:
+        right_strains[key] = [right_strain]
+
+vals = []
+for key in left_strains.keys():
+    # file_info = views[views['file'] == key]
+    # ground_truth_left = file_info['Left strain'].values[0]
+    # ground_truth_right = file_info['Right strain'].values[0]
+    view = views[key]
+    for i, [left_strain, right_strain] in enumerate(zip(left_strains[key], right_strains[key])):
+        vals.append([key, i + 1, view, left_strain, right_strain])
+
+results = pd.DataFrame(vals,
+                       columns=['file', 'cycle', 'view', 'left_strain', 'right_strain'])
+results.to_csv(os.path.join(args.output_path,
+                            'results', args.experiment_id, 'strain_ests.csv'))
+

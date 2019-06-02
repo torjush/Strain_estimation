@@ -1,7 +1,7 @@
 import tensorflow as tf
 
 
-def nncc2d(fixed, warped):
+def maskedNNCC2d(fixed, warped):
     # Create a mask to pick out relevant pixels
     # The ultrasound images has a conical sector of
     # nonzero values, the rest should not be cared about
@@ -36,7 +36,7 @@ def nncc2d(fixed, warped):
     return -tf.reduce_mean(cc)
 
 
-def unmaskedNncc2d(fixed, warped):
+def unmaskedNNCC2d(fixed, warped):
     fixed_mean = tf.reduce_mean(fixed, axis=[1, 2, 3], keep_dims=True)
     warped_mean = tf.reduce_mean(warped, axis=[1, 2, 3], keep_dims=True)
 
